@@ -140,8 +140,8 @@ $title = $isEdit ? 'Edit AI Course' : 'Create AI Course';
                     <div class="form-group">
                         <label class="form-label">Status</label>
                         <select name="status" class="form-select">
-                            <option value="draft" <?= ($course['status'] ?? 'draft') === 'draft' ? 'selected' : '' ?>>Draft</option>
-                            <option value="published" <?= ($course['status'] ?? '') === 'published' ? 'selected' : '' ?>>Published</option>
+                            <option value="draft" <?= empty($course['is_published']) ? 'selected' : '' ?>>Draft</option>
+                            <option value="published" <?= !empty($course['is_published']) ? 'selected' : '' ?>>Published</option>
                         </select>
                         <p class="text-sm text-secondary mt-1">Only published courses are visible to students.</p>
                     </div>
