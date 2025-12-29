@@ -161,10 +161,12 @@ function confirmDelete(id) {
 
 async function deleteCourse(id) {
     try {
-        const response = await API.delete('/admin/courses/' + id);
+        const response = await API.post('/admin/courses/' + id + '/delete');
         if (response.success) {
             Toast.success('Course deleted successfully');
             location.reload();
+        } else {
+            Toast.error(response.message || 'Failed to delete course');
         }
     } catch (error) {
         Toast.error(error.message || 'Failed to delete course');

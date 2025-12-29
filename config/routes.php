@@ -639,6 +639,23 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
         }
     });
 
+    // Delete course (POST-based for JS compatibility)
+    $router->post('/courses/{id}/delete', function ($id) {
+        try {
+            // First delete related records
+            \Core\Database::execute("DELETE FROM lesson_progress WHERE lesson_id IN (SELECT id FROM lessons WHERE course_id = ?)", [$id]);
+            \Core\Database::execute("DELETE FROM lessons WHERE course_id = ?", [$id]);
+            \Core\Database::execute("DELETE FROM enrollments WHERE course_id = ?", [$id]);
+            \Core\Database::execute("DELETE FROM courses WHERE id = ?", [$id]);
+
+            echo json_encode(['success' => true, 'message' => 'Course deleted successfully']);
+        } catch (\Exception $e) {
+            error_log("Course delete error: " . $e->getMessage());
+            echo json_encode(['success' => false, 'message' => 'Failed to delete: ' . $e->getMessage()]);
+        }
+        exit;
+    });
+
     // Payments
     $router->get('/payments', function () {
         global $api;
