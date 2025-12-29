@@ -40,6 +40,7 @@ class View
         $templatePath = TEMPLATES_PATH . '/' . str_replace('.', '/', $template) . '.php';
 
         if (!file_exists($templatePath)) {
+            ob_end_clean();
             throw new \Exception("Template not found: {$template}");
         }
 
@@ -50,9 +51,16 @@ class View
         if ($layout) {
             $layoutPath = TEMPLATES_PATH . '/layouts/' . $layout . '.php';
             if (!file_exists($layoutPath)) {
-                throw new \Exception("Layout not found: {$layout}");
+                // Log error for debugging
+                error_log("Layout not found: {$layoutPath}");
+                // Fallback: output content directly with basic HTML wrapper
+                echo '<!DOCTYPE html><html><head><meta charset="UTF-8"><link rel="stylesheet" href="/css/app.css"></head><body>';
+                echo $content;
+                echo '</body></html>';
+                return;
             }
-            require $layoutPath;
+            // Use include instead of require to prevent fatal errors
+            include $layoutPath;
         } else {
             echo $content;
         }
