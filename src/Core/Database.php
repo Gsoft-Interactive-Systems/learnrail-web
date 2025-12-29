@@ -12,7 +12,7 @@ class Database
     /**
      * Get PDO connection (singleton)
      */
-    public static function getConnection(): ?PDO
+    public static function getConnection(): PDO
     {
         if (self::$pdo === null) {
             try {
@@ -28,7 +28,8 @@ class Database
 
             } catch (PDOException $e) {
                 error_log("Database connection failed: " . $e->getMessage());
-                return null;
+                // Show helpful error instead of failing silently
+                throw new \Exception("Database connection failed. Check config/database.php credentials. Error: " . $e->getMessage());
             }
         }
 
