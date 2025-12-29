@@ -644,21 +644,21 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
             $slug .= '-' . time();
         }
 
+        // Convert status to is_published
+        $isPublished = ($_POST['status'] ?? 'draft') === 'published' ? 1 : 0;
+
         try {
             \Core\Database::execute("
-                INSERT INTO courses (title, slug, description, instructor, duration, category_id, level, status, is_premium, tags, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                INSERT INTO courses (title, slug, description, category_id, level, is_published, is_premium, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
             ", [
                 $title,
                 $slug,
                 $_POST['description'] ?? '',
-                $_POST['instructor'] ?? '',
-                $_POST['duration'] ?? '',
                 !empty($_POST['category_id']) ? (int)$_POST['category_id'] : null,
                 $_POST['level'] ?? 'beginner',
-                $_POST['status'] ?? 'draft',
-                isset($_POST['is_premium']) ? 1 : 0,
-                $_POST['tags'] ?? ''
+                $isPublished,
+                isset($_POST['is_premium']) ? 1 : 0
             ]);
 
             flash('success', 'Course created successfully');
@@ -710,34 +710,34 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
             redirect('/admin/courses');
         }
 
+        // Convert status to is_published (0 or 1)
+        $isPublished = ($_POST['status'] ?? 'draft') === 'published' ? 1 : 0;
+
         try {
-            \Core\Database::execute("
+            $rowsAffected = \Core\Database::execute("
                 UPDATE courses SET
                     title = ?,
                     description = ?,
-                    instructor = ?,
-                    duration = ?,
                     category_id = ?,
                     level = ?,
-                    status = ?,
-                    is_premium = ?,
-                    tags = ?,
-                    updated_at = NOW()
+                    is_published = ?,
+                    is_premium = ?
                 WHERE id = ?
             ", [
                 $_POST['title'] ?? '',
                 $_POST['description'] ?? '',
-                $_POST['instructor'] ?? '',
-                $_POST['duration'] ?? '',
                 !empty($_POST['category_id']) ? (int)$_POST['category_id'] : null,
                 $_POST['level'] ?? 'beginner',
-                $_POST['status'] ?? 'draft',
+                $isPublished,
                 isset($_POST['is_premium']) ? 1 : 0,
-                $_POST['tags'] ?? '',
                 $id
             ]);
 
-            flash('success', 'Course updated successfully');
+            if ($rowsAffected > 0) {
+                flash('success', 'Course updated successfully');
+            } else {
+                flash('warning', 'No changes detected');
+            }
             redirect('/admin/courses');
         } catch (\Exception $e) {
             error_log("Course update error: " . $e->getMessage());

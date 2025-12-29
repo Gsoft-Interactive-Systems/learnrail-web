@@ -122,8 +122,8 @@ $title = $isEdit ? 'Edit Course' : 'Create Course';
                     <div class="form-group">
                         <label class="form-label">Status</label>
                         <select name="status" class="form-select">
-                            <option value="draft" <?= ($course['status'] ?? 'draft') === 'draft' ? 'selected' : '' ?>>Draft</option>
-                            <option value="published" <?= ($course['status'] ?? '') === 'published' ? 'selected' : '' ?>>Published</option>
+                            <option value="draft" <?= empty($course['is_published']) ? 'selected' : '' ?>>Draft</option>
+                            <option value="published" <?= !empty($course['is_published']) ? 'selected' : '' ?>>Published</option>
                         </select>
                     </div>
 

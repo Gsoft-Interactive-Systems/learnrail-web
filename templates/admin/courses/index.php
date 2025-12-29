@@ -101,8 +101,8 @@
                                 </div>
                             </td>
                             <td>
-                                <span class="badge <?= ($course['status'] ?? 'draft') === 'published' ? 'badge-success' : 'badge-secondary' ?>">
-                                    <?= ucfirst($course['status'] ?? 'draft') ?>
+                                <span class="badge <?= !empty($course['is_published']) ? 'badge-success' : 'badge-secondary' ?>">
+                                    <?= !empty($course['is_published']) ? 'Published' : 'Draft' ?>
                                 </span>
                             </td>
                             <td>
