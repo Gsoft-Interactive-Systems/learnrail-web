@@ -580,9 +580,10 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
             $where .= " AND c.level = ?";
             $params[] = $level;
         }
-        if ($status) {
-            $where .= " AND c.status = ?";
-            $params[] = $status;
+        if ($status === 'published') {
+            $where .= " AND c.is_published = 1";
+        } elseif ($status === 'draft') {
+            $where .= " AND c.is_published = 0";
         }
 
         $total = (int) \Core\Database::scalar("SELECT COUNT(*) FROM courses c WHERE {$where}", $params);
@@ -647,9 +648,12 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
         // Convert status to is_published
         $isPublished = ($_POST['status'] ?? 'draft') === 'published' ? 1 : 0;
 
+        // is_free is the inverse of is_premium (premium = NOT free)
+        $isFree = isset($_POST['is_premium']) ? 0 : 1;
+
         try {
             \Core\Database::execute("
-                INSERT INTO courses (title, slug, description, category_id, level, is_published, is_premium, created_at)
+                INSERT INTO courses (title, slug, description, category_id, level, is_published, is_free, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
             ", [
                 $title,
@@ -658,7 +662,7 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
                 !empty($_POST['category_id']) ? (int)$_POST['category_id'] : null,
                 $_POST['level'] ?? 'beginner',
                 $isPublished,
-                isset($_POST['is_premium']) ? 1 : 0
+                $isFree
             ]);
 
             flash('success', 'Course created successfully');
@@ -712,6 +716,8 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
 
         // Convert status to is_published (0 or 1)
         $isPublished = ($_POST['status'] ?? 'draft') === 'published' ? 1 : 0;
+        // is_free is the inverse of is_premium (premium = NOT free)
+        $isFree = isset($_POST['is_premium']) ? 0 : 1;
 
         try {
             $rowsAffected = \Core\Database::execute("
@@ -721,7 +727,8 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
                     category_id = ?,
                     level = ?,
                     is_published = ?,
-                    is_premium = ?
+                    is_free = ?,
+                    updated_at = NOW()
                 WHERE id = ?
             ", [
                 $_POST['title'] ?? '',
@@ -729,7 +736,7 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
                 !empty($_POST['category_id']) ? (int)$_POST['category_id'] : null,
                 $_POST['level'] ?? 'beginner',
                 $isPublished,
-                isset($_POST['is_premium']) ? 1 : 0,
+                $isFree,
                 $id
             ]);
 

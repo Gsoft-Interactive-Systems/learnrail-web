@@ -179,7 +179,7 @@ $title = $isEdit ? 'Edit Course' : 'Create Course';
                     <div class="form-group mb-0">
                         <label class="d-flex items-center gap-3">
                             <input type="checkbox" name="is_premium" value="1"
-                                   <?= ($course['is_premium'] ?? false) ? 'checked' : '' ?>
+                                   <?= (isset($course['is_free']) && !$course['is_free']) ? 'checked' : '' ?>
                                    style="width: 18px; height: 18px;">
                             <span>Premium Content</span>
                         </label>
