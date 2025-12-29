@@ -110,43 +110,90 @@ $router->group(['middleware' => 'auth'], function ($router) {
 
     // Dashboard / Home
     $router->get('/', function () {
-        global $api, $auth;
+        global $auth;
 
         $user = $auth->user();
+        $userId = $user['id'] ?? 0;
 
-        // Fetch dashboard data
-        $enrollments = $api->get('/enrollments', ['limit' => 3, 'status' => 'enrolled']);
-        $featuredCourses = $api->get('/courses', ['featured' => true, 'limit' => 6]);
+        // Get user's enrolled courses with progress
+        $enrolledCourses = \Core\Database::query("
+            SELECT c.*, e.progress_percent, e.status as enrollment_status, e.enrolled_at,
+                   cat.name as category_name
+            FROM enrollments e
+            JOIN courses c ON e.course_id = c.id
+            LEFT JOIN categories cat ON c.category_id = cat.id
+            WHERE e.user_id = ? AND e.status IN ('enrolled', 'in_progress')
+            ORDER BY e.last_accessed_at DESC
+            LIMIT 3
+        ", [$userId]);
+
+        // Get featured courses
+        $featuredCourses = \Core\Database::query("
+            SELECT c.*, cat.name as category_name,
+                   (SELECT COUNT(*) FROM lessons l JOIN modules m ON l.module_id = m.id WHERE m.course_id = c.id) as lesson_count
+            FROM courses c
+            LEFT JOIN categories cat ON c.category_id = cat.id
+            WHERE c.is_featured = 1 AND c.is_published = 1
+            ORDER BY c.created_at DESC
+            LIMIT 6
+        ");
 
         View::render('home/index', [
             'title' => 'Dashboard',
-            'enrolledCourses' => $enrollments['data']['data'] ?? $enrollments['data'] ?? [],
-            'featuredCourses' => $featuredCourses['data']['data'] ?? $featuredCourses['data'] ?? []
+            'enrolledCourses' => $enrolledCourses,
+            'featuredCourses' => $featuredCourses
         ]);
     });
 
     // Courses
     $router->get('/courses', function () {
-        global $api;
-
-        $page = (int)($_GET['page'] ?? 1);
+        $page = max(1, (int)($_GET['page'] ?? 1));
+        $perPage = 12;
+        $offset = ($page - 1) * $perPage;
         $search = $_GET['search'] ?? '';
         $category = $_GET['category'] ?? '';
         $level = $_GET['level'] ?? '';
 
-        $params = ['page' => $page, 'per_page' => 12];
-        if ($search) $params['search'] = $search;
-        if ($category) $params['category'] = $category;
-        if ($level) $params['level'] = $level;
+        $where = "c.is_published = 1";
+        $params = [];
 
-        $courses = $api->get('/courses', $params);
-        $categories = $api->get('/categories');
+        if ($search) {
+            $where .= " AND (c.title LIKE ? OR c.description LIKE ?)";
+            $params[] = "%{$search}%";
+            $params[] = "%{$search}%";
+        }
+        if ($category) {
+            $where .= " AND c.category_id = ?";
+            $params[] = $category;
+        }
+        if ($level) {
+            $where .= " AND c.level = ?";
+            $params[] = $level;
+        }
+
+        $total = (int) \Core\Database::scalar("SELECT COUNT(*) FROM courses c WHERE {$where}", $params);
+
+        $courses = \Core\Database::query("
+            SELECT c.*, cat.name as category_name,
+                   (SELECT COUNT(*) FROM lessons l JOIN modules m ON l.module_id = m.id WHERE m.course_id = c.id) as lesson_count
+            FROM courses c
+            LEFT JOIN categories cat ON c.category_id = cat.id
+            WHERE {$where}
+            ORDER BY c.is_featured DESC, c.created_at DESC
+            LIMIT {$perPage} OFFSET {$offset}
+        ", $params);
+
+        $categories = \Core\Database::query("SELECT * FROM categories WHERE is_active = 1 ORDER BY sort_order, name");
 
         View::render('courses/index', [
             'title' => 'Courses',
-            'courses' => $courses['data']['data'] ?? $courses['data'] ?? [],
-            'meta' => $courses['data']['meta'] ?? [],
-            'categories' => $categories['data'] ?? [],
+            'courses' => $courses,
+            'meta' => [
+                'current_page' => $page,
+                'last_page' => ceil($total / $perPage),
+                'total' => $total
+            ],
+            'categories' => $categories,
             'search' => $search,
             'selectedCategory' => $category,
             'selectedLevel' => $level
@@ -154,73 +201,227 @@ $router->group(['middleware' => 'auth'], function ($router) {
     });
 
     $router->get('/courses/{id}', function ($id) {
-        global $api;
+        global $auth;
+        $userId = $auth->user()['id'] ?? 0;
 
-        $course = $api->get('/courses/' . $id);
+        // Get course with instructor and category
+        $course = \Core\Database::queryOne("
+            SELECT c.*, cat.name as category_name,
+                   i.name as instructor_name, i.bio as instructor_bio, i.avatar as instructor_avatar
+            FROM courses c
+            LEFT JOIN categories cat ON c.category_id = cat.id
+            LEFT JOIN instructors i ON c.instructor_id = i.id
+            WHERE c.id = ? OR c.slug = ?
+        ", [$id, $id]);
 
-        if (!$course['success']) {
+        if (!$course) {
             View::error(404, 'Course not found');
         }
 
+        // Get modules with lessons
+        $modules = \Core\Database::query("
+            SELECT * FROM modules WHERE course_id = ? ORDER BY sort_order
+        ", [$course['id']]);
+
+        foreach ($modules as &$module) {
+            $module['lessons'] = \Core\Database::query("
+                SELECT l.*,
+                       (SELECT status FROM lesson_progress WHERE user_id = ? AND lesson_id = l.id) as progress_status
+                FROM lessons l
+                WHERE l.module_id = ?
+                ORDER BY l.sort_order
+            ", [$userId, $module['id']]);
+        }
+        $course['modules'] = $modules;
+
+        // Check if user is enrolled
+        $enrollment = \Core\Database::queryOne("
+            SELECT * FROM enrollments WHERE user_id = ? AND course_id = ?
+        ", [$userId, $course['id']]);
+        $course['is_enrolled'] = !empty($enrollment);
+        $course['enrollment'] = $enrollment;
+
         View::render('courses/show', [
-            'title' => $course['data']['title'] ?? 'Course Details',
-            'course' => $course['data']
+            'title' => $course['title'] ?? 'Course Details',
+            'course' => $course
         ]);
     });
 
     $router->post('/courses/{id}/enroll', function ($id) {
-        global $api;
+        global $auth;
 
         if (!verify_csrf($_POST['_token'] ?? '')) {
             flash('error', 'Invalid request');
             redirect('/courses/' . $id);
         }
 
-        $result = $api->post('/courses/' . $id . '/enroll');
+        $userId = $auth->user()['id'] ?? 0;
 
-        if ($result['success']) {
-            flash('success', 'Successfully enrolled in course!');
-        } else {
-            flash('error', $result['data']['message'] ?? 'Failed to enroll');
+        // Check if course exists
+        $course = \Core\Database::queryOne("SELECT id FROM courses WHERE id = ? OR slug = ?", [$id, $id]);
+        if (!$course) {
+            flash('error', 'Course not found');
+            redirect('/courses');
         }
 
+        // Check if already enrolled
+        $existing = \Core\Database::queryOne("SELECT id FROM enrollments WHERE user_id = ? AND course_id = ?", [$userId, $course['id']]);
+        if ($existing) {
+            flash('info', 'You are already enrolled in this course');
+            redirect('/courses/' . $id);
+        }
+
+        // Create enrollment
+        \Core\Database::execute("
+            INSERT INTO enrollments (user_id, course_id, status, enrolled_at)
+            VALUES (?, ?, 'enrolled', NOW())
+        ", [$userId, $course['id']]);
+
+        flash('success', 'Successfully enrolled in course!');
         redirect('/courses/' . $id);
     });
 
     $router->get('/courses/{courseId}/lessons/{lessonId}', function ($courseId, $lessonId) {
-        global $api;
+        global $auth;
+        $userId = $auth->user()['id'] ?? 0;
 
-        $lesson = $api->get('/lessons/' . $lessonId);
-        $course = $api->get('/courses/' . $courseId);
+        // Get lesson with module info
+        $lesson = \Core\Database::queryOne("
+            SELECT l.*, m.title as module_title, m.course_id
+            FROM lessons l
+            JOIN modules m ON l.module_id = m.id
+            WHERE l.id = ?
+        ", [$lessonId]);
 
-        if (!$lesson['success']) {
+        if (!$lesson) {
             View::error(404, 'Lesson not found');
         }
 
+        // Get course
+        $course = \Core\Database::queryOne("
+            SELECT c.*, cat.name as category_name
+            FROM courses c
+            LEFT JOIN categories cat ON c.category_id = cat.id
+            WHERE c.id = ?
+        ", [$lesson['course_id']]);
+
+        // Get all lessons for navigation
+        $allLessons = \Core\Database::query("
+            SELECT l.id, l.title, l.sort_order, m.sort_order as module_order
+            FROM lessons l
+            JOIN modules m ON l.module_id = m.id
+            WHERE m.course_id = ?
+            ORDER BY m.sort_order, l.sort_order
+        ", [$lesson['course_id']]);
+
+        // Find prev/next lessons
+        $currentIndex = array_search($lessonId, array_column($allLessons, 'id'));
+        $lesson['prev_lesson'] = $currentIndex > 0 ? $allLessons[$currentIndex - 1] : null;
+        $lesson['next_lesson'] = $currentIndex < count($allLessons) - 1 ? $allLessons[$currentIndex + 1] : null;
+
+        // Update/create lesson progress
+        $progress = \Core\Database::queryOne("SELECT id FROM lesson_progress WHERE user_id = ? AND lesson_id = ?", [$userId, $lessonId]);
+        if (!$progress) {
+            \Core\Database::execute("
+                INSERT INTO lesson_progress (user_id, lesson_id, status, created_at)
+                VALUES (?, ?, 'in_progress', NOW())
+            ", [$userId, $lessonId]);
+        }
+
         View::render('courses/lesson', [
-            'title' => $lesson['data']['title'] ?? 'Lesson',
-            'lesson' => $lesson['data'],
-            'course' => $course['data'] ?? [],
+            'title' => $lesson['title'] ?? 'Lesson',
+            'lesson' => $lesson,
+            'course' => $course ?? [],
             'courseId' => $courseId
         ]);
     });
 
     $router->post('/lessons/{id}/complete', function ($id) {
-        global $api;
+        global $auth;
+        $userId = $auth->user()['id'] ?? 0;
 
-        $result = $api->post('/lessons/' . $id . '/complete');
-        View::json($result);
+        // Update lesson progress
+        $existing = \Core\Database::queryOne("SELECT id FROM lesson_progress WHERE user_id = ? AND lesson_id = ?", [$userId, $id]);
+
+        if ($existing) {
+            \Core\Database::execute("
+                UPDATE lesson_progress SET status = 'completed', completed_at = NOW(), updated_at = NOW()
+                WHERE user_id = ? AND lesson_id = ?
+            ", [$userId, $id]);
+        } else {
+            \Core\Database::execute("
+                INSERT INTO lesson_progress (user_id, lesson_id, status, completed_at, created_at)
+                VALUES (?, ?, 'completed', NOW(), NOW())
+            ", [$userId, $id]);
+        }
+
+        // Update enrollment progress
+        $lesson = \Core\Database::queryOne("
+            SELECT m.course_id FROM lessons l JOIN modules m ON l.module_id = m.id WHERE l.id = ?
+        ", [$id]);
+
+        if ($lesson) {
+            $totalLessons = (int) \Core\Database::scalar("
+                SELECT COUNT(*) FROM lessons l JOIN modules m ON l.module_id = m.id WHERE m.course_id = ?
+            ", [$lesson['course_id']]);
+
+            $completedLessons = (int) \Core\Database::scalar("
+                SELECT COUNT(*) FROM lesson_progress lp
+                JOIN lessons l ON lp.lesson_id = l.id
+                JOIN modules m ON l.module_id = m.id
+                WHERE lp.user_id = ? AND m.course_id = ? AND lp.status = 'completed'
+            ", [$userId, $lesson['course_id']]);
+
+            $progress = $totalLessons > 0 ? round(($completedLessons / $totalLessons) * 100, 2) : 0;
+            $status = $progress >= 100 ? 'completed' : 'in_progress';
+
+            \Core\Database::execute("
+                UPDATE enrollments SET
+                    progress_percent = ?,
+                    completed_lessons = ?,
+                    status = ?,
+                    last_accessed_at = NOW()
+                WHERE user_id = ? AND course_id = ?
+            ", [$progress, $completedLessons, $status, $userId, $lesson['course_id']]);
+
+            // Award points for lesson completion
+            \Core\Database::execute("UPDATE users SET total_points = total_points + 10 WHERE id = ?", [$userId]);
+        }
+
+        View::json(['success' => true, 'message' => 'Lesson marked as complete']);
     });
 
     // Profile
     $router->get('/profile', function () {
-        global $api;
+        global $auth;
+        $userId = $auth->user()['id'] ?? 0;
 
-        $profile = $api->get('/profile');
+        // Get user profile with stats
+        $profile = \Core\Database::queryOne("SELECT * FROM users WHERE id = ?", [$userId]);
+
+        if ($profile) {
+            // Get enrollment stats
+            $profile['courses_enrolled'] = (int) \Core\Database::scalar("
+                SELECT COUNT(*) FROM enrollments WHERE user_id = ?
+            ", [$userId]);
+
+            $profile['courses_completed'] = (int) \Core\Database::scalar("
+                SELECT COUNT(*) FROM enrollments WHERE user_id = ? AND status = 'completed'
+            ", [$userId]);
+
+            $profile['lessons_completed'] = (int) \Core\Database::scalar("
+                SELECT COUNT(*) FROM lesson_progress WHERE user_id = ? AND status = 'completed'
+            ", [$userId]);
+
+            // Get badges count
+            $profile['badges_earned'] = (int) \Core\Database::scalar("
+                SELECT COUNT(*) FROM user_badges WHERE user_id = ?
+            ", [$userId]);
+        }
 
         View::render('profile/index', [
             'title' => 'Profile',
-            'profile' => $profile['data'] ?? []
+            'profile' => $profile ?? []
         ]);
     });
 
@@ -233,29 +434,32 @@ $router->group(['middleware' => 'auth'], function ($router) {
     });
 
     $router->post('/profile/edit', function () {
-        global $api, $auth;
+        global $auth;
 
         if (!verify_csrf($_POST['_token'] ?? '')) {
             flash('error', 'Invalid request');
             redirect('/profile/edit');
         }
 
-        $data = [
-            'first_name' => $_POST['first_name'] ?? '',
-            'last_name' => $_POST['last_name'] ?? '',
-            'phone' => $_POST['phone'] ?? ''
-        ];
+        $userId = $auth->user()['id'] ?? 0;
 
-        $result = $api->put('/profile', $data);
+        \Core\Database::execute("
+            UPDATE users SET
+                first_name = ?,
+                last_name = ?,
+                phone = ?,
+                updated_at = NOW()
+            WHERE id = ?
+        ", [
+            $_POST['first_name'] ?? '',
+            $_POST['last_name'] ?? '',
+            $_POST['phone'] ?? '',
+            $userId
+        ]);
 
-        if ($result['success']) {
-            $auth->refreshUser();
-            flash('success', 'Profile updated successfully');
-            redirect('/profile');
-        } else {
-            flash('error', $result['data']['message'] ?? 'Failed to update profile');
-            redirect('/profile/edit');
-        }
+        $auth->refreshUser();
+        flash('success', 'Profile updated successfully');
+        redirect('/profile');
     });
 
     $router->get('/settings', function () {
@@ -266,80 +470,155 @@ $router->group(['middleware' => 'auth'], function ($router) {
 
     // Subscription
     $router->get('/subscription', function () {
-        global $api;
+        $plans = \Core\Database::query("
+            SELECT * FROM subscription_plans WHERE is_active = 1 ORDER BY sort_order, price
+        ");
 
-        $plans = $api->get('/subscription-plans');
+        // Decode features JSON for each plan
+        foreach ($plans as &$plan) {
+            $plan['features'] = json_decode($plan['features'] ?? '[]', true) ?: [];
+        }
 
         View::render('subscription/plans', [
             'title' => 'Subscription Plans',
-            'plans' => $plans['data'] ?? []
+            'plans' => $plans
         ]);
     });
 
     $router->get('/subscription/payment/{planId}', function ($planId) {
-        global $api;
-
-        $plans = $api->get('/subscription-plans');
-        $selectedPlan = null;
-
-        foreach ($plans['data'] ?? [] as $plan) {
-            if ($plan['id'] == $planId) {
-                $selectedPlan = $plan;
-                break;
-            }
-        }
+        $selectedPlan = \Core\Database::queryOne("
+            SELECT * FROM subscription_plans WHERE id = ? AND is_active = 1
+        ", [$planId]);
 
         if (!$selectedPlan) {
             flash('error', 'Invalid plan selected');
             redirect('/subscription');
         }
 
-        $paymentMethods = $api->get('/payment-methods');
+        $selectedPlan['features'] = json_decode($selectedPlan['features'] ?? '[]', true) ?: [];
+
+        $paymentMethods = \Core\Database::query("
+            SELECT * FROM payment_methods WHERE is_active = 1 ORDER BY sort_order
+        ");
 
         View::render('subscription/payment', [
             'title' => 'Complete Payment',
             'plan' => $selectedPlan,
-            'paymentMethods' => $paymentMethods['data'] ?? []
+            'paymentMethods' => $paymentMethods
         ]);
     });
 
     $router->post('/subscription/payment', function () {
-        global $api;
+        global $auth;
 
         if (!verify_csrf($_POST['_token'] ?? '')) {
             View::json(['success' => false, 'message' => 'Invalid request'], 400);
         }
 
-        $result = $api->post('/payments/initialize', [
-            'subscription_plan_id' => $_POST['plan_id'] ?? '',
-            'payment_method' => $_POST['payment_method'] ?? 'paystack'
-        ]);
+        $userId = $auth->user()['id'] ?? 0;
+        $planId = $_POST['plan_id'] ?? '';
+        $paymentMethod = $_POST['payment_method'] ?? 'paystack';
 
-        View::json($result);
+        // Get plan details
+        $plan = \Core\Database::queryOne("SELECT * FROM subscription_plans WHERE id = ?", [$planId]);
+        if (!$plan) {
+            View::json(['success' => false, 'message' => 'Invalid plan']);
+        }
+
+        // Generate payment reference
+        $reference = 'LR_' . strtoupper(bin2hex(random_bytes(8)));
+
+        // Create pending subscription
+        \Core\Database::execute("
+            INSERT INTO subscriptions (user_id, plan_id, status, payment_method, payment_reference, amount_paid, created_at)
+            VALUES (?, ?, 'pending', ?, ?, ?, NOW())
+        ", [$userId, $planId, $paymentMethod, $reference, $plan['price']]);
+
+        $subscriptionId = \Core\Database::lastInsertId();
+
+        // Create payment record
+        \Core\Database::execute("
+            INSERT INTO payments (user_id, subscription_id, amount, currency, payment_method, reference, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'pending', NOW())
+        ", [$userId, $subscriptionId, $plan['price'], $plan['currency'] ?? 'NGN', $paymentMethod, $reference]);
+
+        // Return payment initialization data (for Paystack, etc.)
+        View::json([
+            'success' => true,
+            'data' => [
+                'reference' => $reference,
+                'amount' => $plan['price'] * 100, // Convert to kobo for Paystack
+                'email' => $auth->user()['email'] ?? '',
+                'plan_name' => $plan['name']
+            ]
+        ]);
     });
 
     // Gamification
     $router->get('/leaderboard', function () {
-        global $api;
+        // Get top 50 users ordered by points
+        $leaders = \Core\Database::query("
+            SELECT id, first_name, last_name, avatar, total_points, current_level
+            FROM users
+            WHERE total_points > 0
+            ORDER BY total_points DESC
+            LIMIT 50
+        ");
 
-        $leaderboard = $api->get('/leaderboard');
+        // Get current user's rank
+        $currentUserRank = null;
+        if (isset($GLOBALS['user']['id'])) {
+            $userId = $GLOBALS['user']['id'];
+            $userPoints = $GLOBALS['user']['total_points'] ?? 0;
+
+            // Count users with more points
+            $rank = (int) \Core\Database::scalar("
+                SELECT COUNT(*) + 1 FROM users WHERE total_points > ?
+            ", [$userPoints]);
+
+            $currentUserRank = [
+                'rank' => $rank,
+                'points' => $userPoints
+            ];
+        }
 
         View::render('gamification/leaderboard', [
             'title' => 'Leaderboard',
-            'leaderboard' => $leaderboard['data'] ?? []
+            'leaderboard' => ['users' => $leaders, 'current_user_rank' => $currentUserRank]
         ]);
     });
 
     $router->get('/achievements', function () {
-        global $api;
+        global $auth;
+        $userId = $auth->user()['id'] ?? 0;
 
-        $achievements = $api->get('/achievements');
-        $badges = $api->get('/badges');
+        // Get all achievements with user progress
+        $achievements = \Core\Database::query("
+            SELECT a.*,
+                   ua.current_value,
+                   ua.is_completed,
+                   ua.completed_at
+            FROM achievements a
+            LEFT JOIN user_achievements ua ON a.id = ua.achievement_id AND ua.user_id = ?
+            WHERE a.is_active = 1
+            ORDER BY a.id
+        ", [$userId]);
+
+        // Get all badges with earned status
+        $badges = \Core\Database::query("
+            SELECT b.*,
+                   ub.earned_at,
+                   CASE WHEN ub.id IS NOT NULL THEN 1 ELSE 0 END as is_earned
+            FROM badges b
+            LEFT JOIN user_badges ub ON b.id = ub.badge_id AND ub.user_id = ?
+            WHERE b.is_active = 1
+            ORDER BY b.points_required
+        ", [$userId]);
 
         View::render('gamification/achievements', [
             'title' => 'Achievements',
-            'achievements' => $achievements['data'] ?? [],
-            'badges' => $badges['data'] ?? []
+            'achievements' => $achievements,
+            'badges' => $badges
         ]);
     });
 
@@ -354,17 +633,37 @@ $router->group(['middleware' => 'auth'], function ($router) {
     });
 
     $router->post('/ai/chat', function () {
-        global $api;
+        global $auth;
+        $userId = $auth->user()['id'] ?? 0;
 
         $data = json_decode(file_get_contents('php://input'), true);
+        $message = $data['message'] ?? '';
+        $sessionId = $data['session_id'] ?? uniqid('ai_session_');
+        $courseId = $data['course_id'] ?? null;
 
-        $result = $api->post('/ai/chat', [
-            'message' => $data['message'] ?? '',
-            'session_id' => $data['session_id'] ?? null,
-            'course_id' => $data['course_id'] ?? null
+        // Store user message
+        \Core\Database::execute("
+            INSERT INTO ai_chat_history (user_id, session_id, role, content, course_id, created_at)
+            VALUES (?, ?, 'user', ?, ?, NOW())
+        ", [$userId, $sessionId, $message, $courseId]);
+
+        // For now, return a placeholder response
+        // In production, this would call an AI API (OpenAI, Claude, etc.)
+        $aiResponse = "I'm your AI tutor. This feature requires integration with an AI service. Your message was: " . $message;
+
+        // Store AI response
+        \Core\Database::execute("
+            INSERT INTO ai_chat_history (user_id, session_id, role, content, course_id, created_at)
+            VALUES (?, ?, 'assistant', ?, ?, NOW())
+        ", [$userId, $sessionId, $aiResponse, $courseId]);
+
+        View::json([
+            'success' => true,
+            'data' => [
+                'message' => $aiResponse,
+                'session_id' => $sessionId
+            ]
         ]);
-
-        View::json($result);
     });
 
     $router->get('/career', function () {
@@ -375,13 +674,25 @@ $router->group(['middleware' => 'auth'], function ($router) {
 
     // Notifications
     $router->get('/notifications', function () {
-        global $api;
+        global $auth;
+        $userId = $auth->user()['id'] ?? 0;
 
-        $notifications = $api->get('/notifications');
+        $notifications = \Core\Database::query("
+            SELECT * FROM notifications
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT 50
+        ", [$userId]);
+
+        // Mark as read
+        \Core\Database::execute("
+            UPDATE notifications SET is_read = 1, read_at = NOW()
+            WHERE user_id = ? AND is_read = 0
+        ", [$userId]);
 
         View::render('notifications/index', [
             'title' => 'Notifications',
-            'notifications' => $notifications['data'] ?? []
+            'notifications' => $notifications
         ]);
     });
 });
@@ -393,13 +704,21 @@ $router->group(['middleware' => 'auth'], function ($router) {
 $router->group(['middleware' => 'subscribed'], function ($router) {
     // Goals
     $router->get('/goals', function () {
-        global $api;
+        global $auth;
+        $userId = $auth->user()['id'] ?? 0;
 
-        $goals = $api->get('/goals');
+        $goals = \Core\Database::query("
+            SELECT g.*,
+                   (SELECT COUNT(*) FROM milestones WHERE goal_id = g.id) as milestone_count,
+                   (SELECT COUNT(*) FROM milestones WHERE goal_id = g.id AND is_completed = 1) as completed_milestones
+            FROM goals g
+            WHERE g.user_id = ?
+            ORDER BY g.status = 'active' DESC, g.created_at DESC
+        ", [$userId]);
 
         View::render('goals/index', [
             'title' => 'My Goals',
-            'goals' => $goals['data']['data'] ?? $goals['data'] ?? []
+            'goals' => $goals
         ]);
     });
 
@@ -410,97 +729,221 @@ $router->group(['middleware' => 'subscribed'], function ($router) {
     });
 
     $router->post('/goals/create', function () {
-        global $api;
+        global $auth;
 
         if (!verify_csrf($_POST['_token'] ?? '')) {
             flash('error', 'Invalid request');
             redirect('/goals/create');
         }
 
-        $result = $api->post('/goals', [
-            'title' => $_POST['title'] ?? '',
-            'description' => $_POST['description'] ?? '',
-            'target_date' => $_POST['target_date'] ?? '',
-            'category' => $_POST['category'] ?? 'learning'
+        $userId = $auth->user()['id'] ?? 0;
+
+        \Core\Database::execute("
+            INSERT INTO goals (user_id, title, description, category, target_date, status, created_at)
+            VALUES (?, ?, ?, ?, ?, 'active', NOW())
+        ", [
+            $userId,
+            $_POST['title'] ?? '',
+            $_POST['description'] ?? '',
+            $_POST['category'] ?? 'learning',
+            !empty($_POST['target_date']) ? $_POST['target_date'] : null
         ]);
 
-        if ($result['success']) {
-            flash('success', 'Goal created successfully!');
-            redirect('/goals');
-        } else {
-            flash('error', $result['data']['message'] ?? 'Failed to create goal');
-            $_SESSION['old_input'] = $_POST;
-            redirect('/goals/create');
-        }
+        flash('success', 'Goal created successfully!');
+        redirect('/goals');
     });
 
     $router->get('/goals/{id}', function ($id) {
-        global $api;
+        global $auth;
+        $userId = $auth->user()['id'] ?? 0;
 
-        $goal = $api->get('/goals/' . $id);
+        $goal = \Core\Database::queryOne("
+            SELECT * FROM goals WHERE id = ? AND user_id = ?
+        ", [$id, $userId]);
 
-        if (!$goal['success']) {
+        if (!$goal) {
             View::error(404, 'Goal not found');
         }
 
+        // Get milestones
+        $goal['milestones'] = \Core\Database::query("
+            SELECT * FROM milestones WHERE goal_id = ? ORDER BY sort_order
+        ", [$id]);
+
+        // Get recent checkins
+        $goal['checkins'] = \Core\Database::query("
+            SELECT * FROM goal_checkins WHERE goal_id = ? ORDER BY created_at DESC LIMIT 10
+        ", [$id]);
+
         View::render('goals/show', [
-            'title' => $goal['data']['title'] ?? 'Goal Details',
-            'goal' => $goal['data']
+            'title' => $goal['title'] ?? 'Goal Details',
+            'goal' => $goal
         ]);
     });
 
     $router->post('/goals/{id}/checkin', function ($id) {
-        global $api;
+        global $auth;
+        $userId = $auth->user()['id'] ?? 0;
 
-        $result = $api->post('/goals/' . $id . '/checkin', [
-            'notes' => $_POST['notes'] ?? ''
+        // Verify goal belongs to user
+        $goal = \Core\Database::queryOne("SELECT id FROM goals WHERE id = ? AND user_id = ?", [$id, $userId]);
+        if (!$goal) {
+            View::json(['success' => false, 'message' => 'Goal not found']);
+        }
+
+        $data = json_decode(file_get_contents('php://input'), true);
+
+        \Core\Database::execute("
+            INSERT INTO goal_checkins (goal_id, note, mood, progress_update, created_at)
+            VALUES (?, ?, ?, ?, NOW())
+        ", [
+            $id,
+            $data['notes'] ?? $_POST['notes'] ?? '',
+            $data['mood'] ?? null,
+            $data['progress_update'] ?? null
         ]);
 
-        View::json($result);
+        // Update goal progress if provided
+        if (!empty($data['progress_update'])) {
+            \Core\Database::execute("
+                UPDATE goals SET progress_percent = ?, updated_at = NOW() WHERE id = ?
+            ", [$data['progress_update'], $id]);
+        }
+
+        View::json(['success' => true, 'message' => 'Check-in recorded']);
     });
 
     // Accountability
     $router->get('/accountability', function () {
-        global $api;
+        global $auth;
+        $userId = $auth->user()['id'] ?? 0;
 
-        $partner = $api->get('/accountability/partner');
-        $conversations = $api->get('/accountability/conversations');
+        // Get accountability partner
+        $assignment = \Core\Database::queryOne("
+            SELECT aa.*, u.id as partner_user_id, u.first_name, u.last_name, u.avatar, u.email
+            FROM accountability_assignments aa
+            JOIN users u ON aa.partner_id = u.id
+            WHERE aa.user_id = ? AND aa.status = 'active'
+        ", [$userId]);
+
+        $partner = $assignment ? [
+            'id' => $assignment['partner_user_id'],
+            'first_name' => $assignment['first_name'],
+            'last_name' => $assignment['last_name'],
+            'avatar' => $assignment['avatar'],
+            'email' => $assignment['email']
+        ] : null;
+
+        // Get conversations
+        $conversations = [];
+        if ($partner) {
+            $conversations = \Core\Database::query("
+                SELECT c.*, m.content as last_message, m.created_at as last_message_at
+                FROM conversations c
+                LEFT JOIN messages m ON c.id = m.conversation_id
+                WHERE (c.participant_1 = ? OR c.participant_2 = ?)
+                ORDER BY c.last_message_at DESC
+            ", [$userId, $userId]);
+        }
 
         View::render('accountability/index', [
             'title' => 'Accountability Partner',
-            'partner' => $partner['data'] ?? null,
-            'conversations' => $conversations['data'] ?? []
+            'partner' => $partner,
+            'conversations' => $conversations
         ]);
     });
 
     $router->get('/accountability/chat', function () {
-        global $api;
+        global $auth;
+        $userId = $auth->user()['id'] ?? 0;
 
-        $partner = $api->get('/accountability/partner');
+        // Get accountability partner
+        $assignment = \Core\Database::queryOne("
+            SELECT aa.*, u.id as partner_user_id, u.first_name, u.last_name, u.avatar
+            FROM accountability_assignments aa
+            JOIN users u ON aa.partner_id = u.id
+            WHERE aa.user_id = ? AND aa.status = 'active'
+        ", [$userId]);
+
+        $partner = $assignment ? [
+            'id' => $assignment['partner_user_id'],
+            'first_name' => $assignment['first_name'],
+            'last_name' => $assignment['last_name'],
+            'avatar' => $assignment['avatar']
+        ] : null;
+
         $messages = [];
+        if ($partner) {
+            // Get or create conversation
+            $conversation = \Core\Database::queryOne("
+                SELECT * FROM conversations
+                WHERE (participant_1 = ? AND participant_2 = ?) OR (participant_1 = ? AND participant_2 = ?)
+            ", [$userId, $partner['id'], $partner['id'], $userId]);
 
-        if ($partner['success'] && isset($partner['data']['id'])) {
-            $messagesResponse = $api->get('/accountability/messages/' . $partner['data']['id']);
-            $messages = $messagesResponse['data'] ?? [];
+            if ($conversation) {
+                $messages = \Core\Database::query("
+                    SELECT m.*, u.first_name, u.last_name, u.avatar
+                    FROM messages m
+                    JOIN users u ON m.sender_id = u.id
+                    WHERE m.conversation_id = ?
+                    ORDER BY m.created_at ASC
+                ", [$conversation['id']]);
+            }
         }
 
         View::render('accountability/chat', [
             'title' => 'Chat with Partner',
-            'partner' => $partner['data'] ?? null,
+            'partner' => $partner,
             'messages' => $messages
         ]);
     });
 
     $router->post('/accountability/messages', function () {
-        global $api;
+        global $auth;
+        $userId = $auth->user()['id'] ?? 0;
 
         $data = json_decode(file_get_contents('php://input'), true);
+        $message = $data['message'] ?? '';
 
-        $result = $api->post('/accountability/messages', [
-            'message' => $data['message'] ?? ''
-        ]);
+        // Get partner
+        $assignment = \Core\Database::queryOne("
+            SELECT partner_id FROM accountability_assignments WHERE user_id = ? AND status = 'active'
+        ", [$userId]);
 
-        View::json($result);
+        if (!$assignment) {
+            View::json(['success' => false, 'message' => 'No accountability partner assigned']);
+        }
+
+        $partnerId = $assignment['partner_id'];
+
+        // Get or create conversation
+        $conversation = \Core\Database::queryOne("
+            SELECT id FROM conversations
+            WHERE (participant_1 = ? AND participant_2 = ?) OR (participant_1 = ? AND participant_2 = ?)
+        ", [$userId, $partnerId, $partnerId, $userId]);
+
+        if (!$conversation) {
+            \Core\Database::execute("
+                INSERT INTO conversations (participant_1, participant_2, created_at)
+                VALUES (?, ?, NOW())
+            ", [$userId, $partnerId]);
+            $conversationId = \Core\Database::lastInsertId();
+        } else {
+            $conversationId = $conversation['id'];
+        }
+
+        // Insert message
+        \Core\Database::execute("
+            INSERT INTO messages (conversation_id, sender_id, content, created_at)
+            VALUES (?, ?, ?, NOW())
+        ", [$conversationId, $userId, $message]);
+
+        // Update conversation last_message_at
+        \Core\Database::execute("
+            UPDATE conversations SET last_message_at = NOW() WHERE id = ?
+        ", [$conversationId]);
+
+        View::json(['success' => true, 'message' => 'Message sent']);
     });
 });
 
@@ -511,46 +954,90 @@ $router->group(['middleware' => 'subscribed'], function ($router) {
 $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($router) {
     // Dashboard
     $router->get('/', function () {
-        global $api;
+        // Get dashboard stats
+        $stats = [
+            'total_users' => (int) \Core\Database::scalar("SELECT COUNT(*) FROM users"),
+            'total_courses' => (int) \Core\Database::scalar("SELECT COUNT(*) FROM courses"),
+            'total_enrollments' => (int) \Core\Database::scalar("SELECT COUNT(*) FROM enrollments"),
+            'total_revenue' => (float) \Core\Database::scalar("SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status = 'completed'"),
+            'active_subscriptions' => (int) \Core\Database::scalar("SELECT COUNT(*) FROM subscriptions WHERE status = 'active'"),
+            'new_users_today' => (int) \Core\Database::scalar("SELECT COUNT(*) FROM users WHERE DATE(created_at) = CURDATE()"),
+            'new_users_month' => (int) \Core\Database::scalar("SELECT COUNT(*) FROM users WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)")
+        ];
 
-        $dashboard = $api->get('/admin/dashboard');
+        // Recent users
+        $stats['recent_users'] = \Core\Database::query("
+            SELECT id, first_name, last_name, email, created_at FROM users ORDER BY created_at DESC LIMIT 5
+        ");
+
+        // Recent payments
+        $stats['recent_payments'] = \Core\Database::query("
+            SELECT p.*, u.first_name, u.last_name, u.email
+            FROM payments p
+            JOIN users u ON p.user_id = u.id
+            ORDER BY p.created_at DESC
+            LIMIT 5
+        ");
 
         View::render('admin/dashboard', [
             'title' => 'Admin Dashboard',
-            'stats' => $dashboard['data'] ?? []
+            'stats' => $stats
         ], 'admin');
     });
 
     // Users
     $router->get('/users', function () {
-        global $api;
-
-        $page = (int)($_GET['page'] ?? 1);
+        $page = max(1, (int)($_GET['page'] ?? 1));
+        $perPage = 20;
+        $offset = ($page - 1) * $perPage;
         $search = $_GET['search'] ?? '';
 
-        $params = ['page' => $page, 'per_page' => 20];
-        if ($search) $params['search'] = $search;
+        $where = "1=1";
+        $params = [];
 
-        $users = $api->get('/admin/users', $params);
+        if ($search) {
+            $where .= " AND (first_name LIKE ? OR last_name LIKE ? OR email LIKE ?)";
+            $params[] = "%{$search}%";
+            $params[] = "%{$search}%";
+            $params[] = "%{$search}%";
+        }
+
+        $total = (int) \Core\Database::scalar("SELECT COUNT(*) FROM users WHERE {$where}", $params);
+
+        $users = \Core\Database::query("
+            SELECT u.*,
+                   (SELECT COUNT(*) FROM enrollments WHERE user_id = u.id) as enrollment_count,
+                   (SELECT COUNT(*) FROM subscriptions WHERE user_id = u.id AND status = 'active') as active_subscription
+            FROM users u
+            WHERE {$where}
+            ORDER BY u.created_at DESC
+            LIMIT {$perPage} OFFSET {$offset}
+        ", $params);
 
         View::render('admin/users/index', [
             'title' => 'Manage Users',
-            'users' => $users['data']['data'] ?? $users['data'] ?? [],
-            'meta' => $users['data']['meta'] ?? [],
+            'users' => $users,
+            'meta' => [
+                'current_page' => $page,
+                'last_page' => ceil($total / $perPage),
+                'total' => $total
+            ],
             'search' => $search
         ], 'admin');
     });
 
     $router->post('/users/{id}/role', function ($id) {
-        global $api;
-
         $data = json_decode(file_get_contents('php://input'), true);
+        $role = $data['role'] ?? 'user';
 
-        $result = $api->put('/admin/users/' . $id, [
-            'role' => $data['role'] ?? 'user'
-        ]);
+        // Validate role
+        if (!in_array($role, ['user', 'admin', 'partner'])) {
+            View::json(['success' => false, 'message' => 'Invalid role']);
+        }
 
-        View::json($result);
+        \Core\Database::execute("UPDATE users SET role = ?, updated_at = NOW() WHERE id = ?", [$role, $id]);
+
+        View::json(['success' => true, 'message' => 'Role updated successfully']);
     });
 
     // Courses
@@ -790,36 +1277,87 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
 
     // Payments
     $router->get('/payments', function () {
-        global $api;
+        $page = max(1, (int)($_GET['page'] ?? 1));
+        $perPage = 20;
+        $offset = ($page - 1) * $perPage;
 
-        $page = (int)($_GET['page'] ?? 1);
-        $payments = $api->get('/admin/payments', ['page' => $page, 'per_page' => 20]);
+        $total = (int) \Core\Database::scalar("SELECT COUNT(*) FROM payments");
+
+        $payments = \Core\Database::query("
+            SELECT p.*, u.first_name, u.last_name, u.email,
+                   sp.name as plan_name
+            FROM payments p
+            JOIN users u ON p.user_id = u.id
+            LEFT JOIN subscriptions s ON p.subscription_id = s.id
+            LEFT JOIN subscription_plans sp ON s.plan_id = sp.id
+            ORDER BY p.created_at DESC
+            LIMIT {$perPage} OFFSET {$offset}
+        ");
 
         View::render('admin/payments/index', [
             'title' => 'Payments',
-            'payments' => $payments['data']['data'] ?? $payments['data'] ?? [],
-            'meta' => $payments['data']['meta'] ?? []
+            'payments' => $payments,
+            'meta' => [
+                'current_page' => $page,
+                'last_page' => ceil($total / $perPage),
+                'total' => $total
+            ]
         ], 'admin');
     });
 
     $router->post('/payments/{id}/approve', function ($id) {
-        global $api;
+        // Get payment
+        $payment = \Core\Database::queryOne("SELECT * FROM payments WHERE id = ?", [$id]);
+        if (!$payment) {
+            View::json(['success' => false, 'message' => 'Payment not found']);
+        }
 
-        $result = $api->put('/admin/payments/' . $id . '/approve');
-        View::json($result);
+        // Update payment status
+        \Core\Database::execute("
+            UPDATE payments SET status = 'completed', paid_at = NOW() WHERE id = ?
+        ", [$id]);
+
+        // Activate subscription if exists
+        if ($payment['subscription_id']) {
+            $subscription = \Core\Database::queryOne("SELECT * FROM subscriptions WHERE id = ?", [$payment['subscription_id']]);
+            if ($subscription) {
+                $plan = \Core\Database::queryOne("SELECT * FROM subscription_plans WHERE id = ?", [$subscription['plan_id']]);
+                $durationDays = $plan['duration_days'] ?? 30;
+
+                \Core\Database::execute("
+                    UPDATE subscriptions SET
+                        status = 'active',
+                        start_date = CURDATE(),
+                        end_date = DATE_ADD(CURDATE(), INTERVAL ? DAY),
+                        updated_at = NOW()
+                    WHERE id = ?
+                ", [$durationDays, $payment['subscription_id']]);
+            }
+        }
+
+        View::json(['success' => true, 'message' => 'Payment approved']);
     });
 
     // Subscriptions
     $router->get('/subscriptions', function () {
-        global $api;
+        $subscriptions = \Core\Database::query("
+            SELECT s.*, u.first_name, u.last_name, u.email, sp.name as plan_name
+            FROM subscriptions s
+            JOIN users u ON s.user_id = u.id
+            JOIN subscription_plans sp ON s.plan_id = sp.id
+            ORDER BY s.created_at DESC
+            LIMIT 50
+        ");
 
-        $subscriptions = $api->get('/admin/subscriptions', ['per_page' => 20]);
-        $plans = $api->get('/admin/subscription-plans');
+        $plans = \Core\Database::query("SELECT * FROM subscription_plans ORDER BY sort_order, price");
+        foreach ($plans as &$plan) {
+            $plan['features'] = json_decode($plan['features'] ?? '[]', true) ?: [];
+        }
 
         View::render('admin/subscriptions/index', [
             'title' => 'Subscriptions',
-            'subscriptions' => $subscriptions['data']['data'] ?? $subscriptions['data'] ?? [],
-            'plans' => $plans['data'] ?? []
+            'subscriptions' => $subscriptions,
+            'plans' => $plans
         ], 'admin');
     });
 
@@ -832,153 +1370,204 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
     });
 
     $router->post('/subscriptions/plans/store', function () {
-        global $api;
-
         if (!verify_csrf($_POST['_token'] ?? '')) {
             flash('error', 'Invalid request');
             redirect('/admin/subscriptions/plans/create');
         }
 
-        $features = array_filter($_POST['features'] ?? [], fn($f) => !empty(trim($f)));
+        $features = array_values(array_filter($_POST['features'] ?? [], fn($f) => !empty(trim($f))));
+        $slug = strtolower(trim(preg_replace('/[^A-Za-z0-9-]+/', '-', $_POST['name'] ?? '')));
 
-        $result = $api->post('/admin/subscription-plans', [
-            'name' => $_POST['name'] ?? '',
-            'slug' => $_POST['slug'] ?? '',
-            'description' => $_POST['description'] ?? '',
-            'price' => $_POST['price'] ?? 0,
-            'original_price' => $_POST['original_price'] ?? null,
-            'duration_days' => $_POST['duration_days'] ?? 30,
-            'duration_months' => $_POST['duration_months'] ?? 1,
-            'features' => $features,
-            'is_active' => isset($_POST['is_active']),
-            'is_popular' => isset($_POST['is_popular']),
-            'includes_goal_tracker' => isset($_POST['includes_goal_tracker']),
-            'includes_accountability_partner' => isset($_POST['includes_accountability_partner'])
+        \Core\Database::execute("
+            INSERT INTO subscription_plans (name, slug, description, price, original_price, duration_days, duration_months, features, is_active, is_popular, includes_goal_tracker, includes_accountability_partner, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        ", [
+            $_POST['name'] ?? '',
+            $slug,
+            $_POST['description'] ?? '',
+            $_POST['price'] ?? 0,
+            !empty($_POST['original_price']) ? $_POST['original_price'] : null,
+            $_POST['duration_days'] ?? 30,
+            $_POST['duration_months'] ?? 1,
+            json_encode($features),
+            isset($_POST['is_active']) ? 1 : 0,
+            isset($_POST['is_popular']) ? 1 : 0,
+            isset($_POST['includes_goal_tracker']) ? 1 : 0,
+            isset($_POST['includes_accountability_partner']) ? 1 : 0
         ]);
 
-        if ($result['success']) {
-            flash('success', 'Plan created successfully');
-            redirect('/admin/subscriptions');
-        } else {
-            flash('error', $result['data']['message'] ?? 'Failed to create plan');
-            $_SESSION['old_input'] = $_POST;
-            redirect('/admin/subscriptions/plans/create');
-        }
+        flash('success', 'Plan created successfully');
+        redirect('/admin/subscriptions');
     });
 
     $router->get('/subscriptions/plans/{id}/edit', function ($id) {
-        global $api;
+        $plan = \Core\Database::queryOne("SELECT * FROM subscription_plans WHERE id = ?", [$id]);
 
-        $plan = $api->get('/admin/subscription-plans/' . $id);
-
-        if (!$plan['success']) {
+        if (!$plan) {
             flash('error', 'Plan not found');
             redirect('/admin/subscriptions');
         }
 
+        $plan['features'] = json_decode($plan['features'] ?? '[]', true) ?: [];
+
         View::render('admin/subscriptions/edit-plan', [
             'title' => 'Edit Plan',
-            'plan' => $plan['data']
+            'plan' => $plan
         ], 'admin');
     });
 
     $router->post('/subscriptions/plans/{id}/update', function ($id) {
-        global $api;
-
         if (!verify_csrf($_POST['_token'] ?? '')) {
             flash('error', 'Invalid request');
             redirect('/admin/subscriptions/plans/' . $id . '/edit');
         }
 
-        $features = array_filter($_POST['features'] ?? [], fn($f) => !empty(trim($f)));
+        $features = array_values(array_filter($_POST['features'] ?? [], fn($f) => !empty(trim($f))));
 
-        $result = $api->put('/admin/subscription-plans/' . $id, [
-            'name' => $_POST['name'] ?? '',
-            'slug' => $_POST['slug'] ?? '',
-            'description' => $_POST['description'] ?? '',
-            'price' => $_POST['price'] ?? 0,
-            'original_price' => $_POST['original_price'] ?? null,
-            'duration_days' => $_POST['duration_days'] ?? 30,
-            'duration_months' => $_POST['duration_months'] ?? 1,
-            'features' => $features,
-            'is_active' => isset($_POST['is_active']),
-            'is_popular' => isset($_POST['is_popular']),
-            'includes_goal_tracker' => isset($_POST['includes_goal_tracker']),
-            'includes_accountability_partner' => isset($_POST['includes_accountability_partner'])
+        \Core\Database::execute("
+            UPDATE subscription_plans SET
+                name = ?,
+                description = ?,
+                price = ?,
+                original_price = ?,
+                duration_days = ?,
+                duration_months = ?,
+                features = ?,
+                is_active = ?,
+                is_popular = ?,
+                includes_goal_tracker = ?,
+                includes_accountability_partner = ?,
+                updated_at = NOW()
+            WHERE id = ?
+        ", [
+            $_POST['name'] ?? '',
+            $_POST['description'] ?? '',
+            $_POST['price'] ?? 0,
+            !empty($_POST['original_price']) ? $_POST['original_price'] : null,
+            $_POST['duration_days'] ?? 30,
+            $_POST['duration_months'] ?? 1,
+            json_encode($features),
+            isset($_POST['is_active']) ? 1 : 0,
+            isset($_POST['is_popular']) ? 1 : 0,
+            isset($_POST['includes_goal_tracker']) ? 1 : 0,
+            isset($_POST['includes_accountability_partner']) ? 1 : 0,
+            $id
         ]);
 
-        if ($result['success']) {
-            flash('success', 'Plan updated successfully');
-            redirect('/admin/subscriptions');
-        } else {
-            flash('error', $result['data']['message'] ?? 'Failed to update plan');
-            redirect('/admin/subscriptions/plans/' . $id . '/edit');
-        }
+        flash('success', 'Plan updated successfully');
+        redirect('/admin/subscriptions');
     });
 
     $router->delete('/subscriptions/plans/{id}/delete', function ($id) {
-        global $api;
+        // Check if plan has active subscriptions
+        $activeCount = (int) \Core\Database::scalar("SELECT COUNT(*) FROM subscriptions WHERE plan_id = ? AND status = 'active'", [$id]);
 
-        $result = $api->delete('/admin/subscription-plans/' . $id);
-        View::json($result);
+        if ($activeCount > 0) {
+            View::json(['success' => false, 'message' => 'Cannot delete plan with active subscriptions']);
+        }
+
+        \Core\Database::execute("DELETE FROM subscription_plans WHERE id = ?", [$id]);
+        View::json(['success' => true, 'message' => 'Plan deleted successfully']);
     });
 
     // Reports
     $router->get('/reports', function () {
-        global $api;
+        // User Report
+        $userReport = [
+            'total' => (int) \Core\Database::scalar("SELECT COUNT(*) FROM users"),
+            'active' => (int) \Core\Database::scalar("SELECT COUNT(*) FROM users WHERE status = 'active'"),
+            'new_this_month' => (int) \Core\Database::scalar("SELECT COUNT(*) FROM users WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)"),
+            'by_role' => \Core\Database::query("SELECT role, COUNT(*) as count FROM users GROUP BY role")
+        ];
 
-        $userReport = $api->get('/admin/reports/users');
-        $revenueReport = $api->get('/admin/reports/revenue');
-        $courseReport = $api->get('/admin/reports/courses');
+        // Revenue Report
+        $revenueReport = [
+            'total' => (float) \Core\Database::scalar("SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status = 'completed'"),
+            'this_month' => (float) \Core\Database::scalar("SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status = 'completed' AND paid_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)"),
+            'by_method' => \Core\Database::query("SELECT payment_method, COUNT(*) as count, SUM(amount) as total FROM payments WHERE status = 'completed' GROUP BY payment_method")
+        ];
+
+        // Course Report
+        $courseReport = [
+            'total' => (int) \Core\Database::scalar("SELECT COUNT(*) FROM courses"),
+            'published' => (int) \Core\Database::scalar("SELECT COUNT(*) FROM courses WHERE is_published = 1"),
+            'total_enrollments' => (int) \Core\Database::scalar("SELECT COUNT(*) FROM enrollments"),
+            'completions' => (int) \Core\Database::scalar("SELECT COUNT(*) FROM enrollments WHERE status = 'completed'"),
+            'top_courses' => \Core\Database::query("
+                SELECT c.id, c.title, COUNT(e.id) as enrollment_count
+                FROM courses c
+                LEFT JOIN enrollments e ON c.id = e.course_id
+                GROUP BY c.id
+                ORDER BY enrollment_count DESC
+                LIMIT 5
+            ")
+        ];
 
         View::render('admin/reports', [
             'title' => 'Reports & Analytics',
-            'userReport' => $userReport['data'] ?? [],
-            'revenueReport' => $revenueReport['data'] ?? [],
-            'courseReport' => $courseReport['data'] ?? []
+            'userReport' => $userReport,
+            'revenueReport' => $revenueReport,
+            'courseReport' => $courseReport
         ], 'admin');
     });
 
     // Settings
     $router->get('/settings', function () {
-        global $api;
+        $settings = \Core\Database::query("SELECT * FROM settings ORDER BY id");
 
-        $settings = $api->get('/admin/settings');
-        $paymentMethods = $api->get('/admin/payment-methods');
+        // Convert to key-value array
+        $settingsArray = [];
+        foreach ($settings as $setting) {
+            $settingsArray[$setting['key']] = $setting['value'];
+        }
+
+        $paymentMethods = \Core\Database::query("SELECT * FROM payment_methods ORDER BY sort_order");
 
         View::render('admin/settings/index', [
             'title' => 'Platform Settings',
-            'settings' => $settings['data'] ?? [],
-            'paymentMethods' => $paymentMethods['data'] ?? []
+            'settings' => $settingsArray,
+            'paymentMethods' => $paymentMethods
         ], 'admin');
     });
 
     $router->post('/settings', function () {
-        global $api;
-
         if (!verify_csrf($_POST['_token'] ?? '')) {
             flash('error', 'Invalid request');
             redirect('/admin/settings');
         }
 
-        $result = $api->put('/admin/settings', $_POST);
+        // Update each setting
+        foreach ($_POST as $key => $value) {
+            if ($key === '_token') continue;
 
-        if ($result['success']) {
-            flash('success', 'Settings updated successfully');
-        } else {
-            flash('error', $result['data']['message'] ?? 'Failed to update settings');
+            // Check if setting exists
+            $exists = \Core\Database::scalar("SELECT COUNT(*) FROM settings WHERE `key` = ?", [$key]);
+
+            if ($exists) {
+                \Core\Database::execute("UPDATE settings SET value = ?, updated_at = NOW() WHERE `key` = ?", [$value, $key]);
+            } else {
+                \Core\Database::execute("INSERT INTO settings (`key`, value, type, updated_at) VALUES (?, ?, 'string', NOW())", [$key, $value]);
+            }
         }
 
+        flash('success', 'Settings updated successfully');
         redirect('/admin/settings');
     });
 
     $router->post('/payment-methods/{id}', function ($id) {
-        global $api;
-
         $data = json_decode(file_get_contents('php://input'), true);
 
-        $result = $api->put('/admin/payment-methods/' . $id, $data);
-        View::json($result);
+        \Core\Database::execute("
+            UPDATE payment_methods SET
+                is_active = ?,
+                updated_at = NOW()
+            WHERE id = ?
+        ", [
+            isset($data['is_active']) ? 1 : 0,
+            $id
+        ]);
+
+        View::json(['success' => true, 'message' => 'Payment method updated']);
     });
 
     // AI Courses - Direct Database Access (no API)
