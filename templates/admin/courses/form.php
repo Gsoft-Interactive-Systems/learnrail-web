@@ -1,6 +1,6 @@
 <?php
 $isEdit = !empty($course);
-$action = $isEdit ? "/admin/courses/{$course['id']}/update" : '/admin/courses/store';
+$action = $isEdit ? "/admin/courses/{$course['id']}/edit" : '/admin/courses/create';
 $title = $isEdit ? 'Edit Course' : 'Create Course';
 ?>
 
