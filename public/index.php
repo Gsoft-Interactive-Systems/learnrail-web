@@ -4,6 +4,9 @@
  * Front Controller
  */
 
+// Start output buffering to prevent any early output breaking HTML
+ob_start();
+
 // Load configuration
 require_once __DIR__ . '/../config/app.php';
 
