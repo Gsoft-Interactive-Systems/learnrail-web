@@ -15,6 +15,9 @@ class View
     {
         global $auth;
 
+        // TEMPORARY DEBUG: Output at start of render
+        echo "<!-- VIEW_RENDER_START template={$template} layout={$layout} -->\n";
+
         // Merge shared data
         $data = array_merge(self::$shared, $data);
 
@@ -35,6 +38,14 @@ class View
         // Extract data to variables
         extract($data);
 
+        // Check if output has already been sent
+        if (ob_get_level() > 0) {
+            // Clean any existing output buffers
+            while (ob_get_level() > 0) {
+                ob_end_clean();
+            }
+        }
+
         // Capture template content
         ob_start();
         $templatePath = TEMPLATES_PATH . '/' . str_replace('.', '/', $template) . '.php';
@@ -50,17 +61,28 @@ class View
         // Render with layout or just content
         if ($layout) {
             $layoutPath = TEMPLATES_PATH . '/layouts/' . $layout . '.php';
+
+            // DEBUG: Check if layout path is correct
             if (!file_exists($layoutPath)) {
-                // Log error for debugging
-                error_log("Layout not found: {$layoutPath}");
                 // Fallback: output content directly with basic HTML wrapper
                 echo '<!DOCTYPE html><html><head><meta charset="UTF-8"><link rel="stylesheet" href="/css/app.css"></head><body>';
+                echo '<!-- DEBUG: Layout not found at: ' . htmlspecialchars($layoutPath) . ' -->';
                 echo $content;
                 echo '</body></html>';
                 return;
             }
-            // Use include instead of require to prevent fatal errors
-            include $layoutPath;
+
+            // Ensure $content is available in the layout scope
+            $__content = $content;
+
+            // DEBUG: About to include layout
+            echo "<!-- VIEW_RENDER_LAYOUT_ABOUT_TO_INCLUDE path={$layoutPath} exists=" . (file_exists($layoutPath) ? 'yes' : 'no') . " -->\n";
+
+            // Include layout
+            require $layoutPath;
+
+            // DEBUG: After layout included
+            echo "<!-- VIEW_RENDER_LAYOUT_INCLUDED -->\n";
         } else {
             echo $content;
         }
