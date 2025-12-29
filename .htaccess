@@ -2,11 +2,18 @@
     RewriteEngine On
     RewriteBase /
 
-    # If the request is for an existing file in public, serve it directly
-    RewriteCond %{REQUEST_URI} ^/(css|js|images|fonts)/
+    # Skip if already in public directory
+    RewriteCond %{REQUEST_URI} ^/public/
+    RewriteRule ^ - [L]
+
+    # Serve static assets from public folder (css, js, images, fonts)
+    RewriteRule ^(css|js|images|fonts)/(.*)$ public/$1/$2 [L]
+
+    # Serve existing files from public folder
+    RewriteCond %{DOCUMENT_ROOT}/public%{REQUEST_URI} -f [OR]
+    RewriteCond %{DOCUMENT_ROOT}/public%{REQUEST_URI} -d
     RewriteRule ^(.*)$ public/$1 [L]
 
-    # Redirect all other requests to public/index.php
-    RewriteCond %{REQUEST_URI} !^/public/
-    RewriteRule ^(.*)$ public/$1 [L]
+    # All other requests go to public/index.php
+    RewriteRule ^(.*)$ public/index.php [L,QSA]
 </IfModule>
