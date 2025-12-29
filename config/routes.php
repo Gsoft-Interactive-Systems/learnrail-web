@@ -832,180 +832,265 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
         View::json($result);
     });
 
-    // AI Courses
+    // AI Courses - Direct Database Access (no API)
     $router->get('/ai-courses', function () {
-        global $api;
 
-        $page = (int)($_GET['page'] ?? 1);
+        $page = max(1, (int)($_GET['page'] ?? 1));
+        $perPage = 20;
+        $offset = ($page - 1) * $perPage;
         $search = $_GET['search'] ?? '';
         $status = $_GET['status'] ?? '';
         $level = $_GET['level'] ?? '';
 
-        $params = ['page' => $page, 'per_page' => 20];
-        if ($search) $params['search'] = $search;
-        if ($status) $params['status'] = $status;
-        if ($level) $params['level'] = $level;
+        $where = "1=1";
+        $params = [];
 
-        $courses = $api->get('/admin/ai-courses', $params);
+        if ($search) {
+            $where .= " AND (title LIKE ? OR description LIKE ?)";
+            $params[] = "%{$search}%";
+            $params[] = "%{$search}%";
+        }
+        if ($status === 'published') {
+            $where .= " AND is_published = 1";
+        } elseif ($status === 'draft') {
+            $where .= " AND is_published = 0";
+        }
+        if ($level) {
+            $where .= " AND level = ?";
+            $params[] = $level;
+        }
+
+        // Get total count
+        $total = (int) \Core\Database::scalar("SELECT COUNT(*) FROM ai_courses WHERE {$where}", $params);
+
+        // Get courses with counts
+        $params[] = $perPage;
+        $params[] = $offset;
+        $courses = \Core\Database::query("
+            SELECT c.*,
+                   (SELECT COUNT(*) FROM ai_modules WHERE course_id = c.id) as module_count,
+                   (SELECT COUNT(*) FROM ai_lessons l JOIN ai_modules m ON l.module_id = m.id WHERE m.course_id = c.id) as lesson_count,
+                   (SELECT COUNT(*) FROM ai_enrollments WHERE course_id = c.id) as enrollment_count
+            FROM ai_courses c
+            WHERE {$where}
+            ORDER BY c.created_at DESC
+            LIMIT ? OFFSET ?
+        ", $params);
 
         View::render('admin/ai-courses/index', [
             'title' => 'AI Courses',
-            'courses' => $courses['data']['data'] ?? $courses['data'] ?? [],
-            'meta' => $courses['data']['meta'] ?? []
+            'courses' => $courses,
+            'totalCourses' => $total,
+            'currentPage' => $page,
+            'totalPages' => ceil($total / $perPage)
         ], 'admin');
     });
 
     $router->get('/ai-courses/create', function () {
-        global $api;
-
-        $categories = $api->get('/admin/categories');
+        $categories = \Core\Database::query("SELECT * FROM categories ORDER BY name");
 
         View::render('admin/ai-courses/form', [
             'title' => 'Create AI Course',
             'course' => null,
-            'categories' => $categories['data'] ?? []
+            'categories' => $categories
         ], 'admin');
     });
 
     $router->post('/ai-courses/store', function () {
-        global $api;
-
         if (!verify_csrf($_POST['_token'] ?? '')) {
             flash('error', 'Invalid request');
             redirect('/admin/ai-courses/create');
         }
 
-        $result = $api->post('/admin/ai-courses', $_POST);
+        $title = trim($_POST['title'] ?? '');
+        if (empty($title)) {
+            flash('error', 'Title is required');
+            $_SESSION['old_input'] = $_POST;
+            redirect('/admin/ai-courses/create');
+        }
 
-        if ($result['success']) {
+        // Generate slug
+        $slug = strtolower(trim(preg_replace('/[^A-Za-z0-9-]+/', '-', $title)));
+        $existingSlug = \Core\Database::scalar("SELECT COUNT(*) FROM ai_courses WHERE slug = ?", [$slug]);
+        if ($existingSlug > 0) {
+            $slug .= '-' . time();
+        }
+
+        \Core\Database::execute("
+            INSERT INTO ai_courses (title, slug, description, short_description, category_id, level, is_published, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
+        ", [
+            $title,
+            $slug,
+            $_POST['description'] ?? '',
+            $_POST['short_description'] ?? '',
+            $_POST['category_id'] ?: null,
+            $_POST['level'] ?? 'beginner',
+            isset($_POST['is_published']) ? 1 : 0
+        ]);
+
+        $courseId = \Core\Database::lastInsertId();
+
+        if ($courseId) {
             flash('success', 'AI Course created successfully');
-            $courseId = $result['data']['id'] ?? null;
-            if ($courseId) {
-                redirect('/admin/ai-courses/' . $courseId . '/curriculum');
-            } else {
-                redirect('/admin/ai-courses');
-            }
+            redirect('/admin/ai-courses/' . $courseId . '/curriculum');
         } else {
-            flash('error', $result['data']['message'] ?? 'Failed to create AI course');
+            flash('error', 'Failed to create AI course');
             $_SESSION['old_input'] = $_POST;
             redirect('/admin/ai-courses/create');
         }
     });
 
     $router->get('/ai-courses/{id}/edit', function ($id) {
-        global $api;
-
-        $course = $api->get('/admin/ai-courses/' . $id);
-        $categories = $api->get('/admin/categories');
-
-        if (!$course['success']) {
+        $course = \Core\Database::queryOne("SELECT * FROM ai_courses WHERE id = ?", [$id]);
+        if (!$course) {
             View::error(404, 'AI Course not found');
         }
 
+        $categories = \Core\Database::query("SELECT * FROM categories ORDER BY name");
+
         View::render('admin/ai-courses/form', [
             'title' => 'Edit AI Course',
-            'course' => $course['data'],
-            'categories' => $categories['data'] ?? []
+            'course' => $course,
+            'categories' => $categories
         ], 'admin');
     });
 
     $router->post('/ai-courses/{id}/update', function ($id) {
-        global $api;
-
         if (!verify_csrf($_POST['_token'] ?? '')) {
             flash('error', 'Invalid request');
             redirect('/admin/ai-courses/' . $id . '/edit');
         }
 
-        $result = $api->put('/admin/ai-courses/' . $id, $_POST);
-
-        if ($result['success']) {
-            flash('success', 'AI Course updated successfully');
-            redirect('/admin/ai-courses/' . $id . '/edit');
-        } else {
-            flash('error', $result['data']['message'] ?? 'Failed to update AI course');
-            redirect('/admin/ai-courses/' . $id . '/edit');
+        $course = \Core\Database::queryOne("SELECT id FROM ai_courses WHERE id = ?", [$id]);
+        if (!$course) {
+            flash('error', 'Course not found');
+            redirect('/admin/ai-courses');
         }
+
+        \Core\Database::execute("
+            UPDATE ai_courses SET
+                title = ?,
+                description = ?,
+                short_description = ?,
+                category_id = ?,
+                level = ?,
+                is_published = ?
+            WHERE id = ?
+        ", [
+            $_POST['title'] ?? '',
+            $_POST['description'] ?? '',
+            $_POST['short_description'] ?? '',
+            $_POST['category_id'] ?: null,
+            $_POST['level'] ?? 'beginner',
+            isset($_POST['is_published']) ? 1 : 0,
+            $id
+        ]);
+
+        flash('success', 'AI Course updated successfully');
+        redirect('/admin/ai-courses/' . $id . '/edit');
     });
 
     $router->get('/ai-courses/{id}/curriculum', function ($id) {
-        global $api;
-
-        $course = $api->get('/admin/ai-courses/' . $id);
-
-        if (!$course['success']) {
+        $course = \Core\Database::queryOne("SELECT * FROM ai_courses WHERE id = ?", [$id]);
+        if (!$course) {
             View::error(404, 'AI Course not found');
         }
 
+        // Get modules with lessons
+        $modules = \Core\Database::query("
+            SELECT * FROM ai_modules WHERE course_id = ? ORDER BY sort_order
+        ", [$id]);
+
+        foreach ($modules as &$module) {
+            $module['lessons'] = \Core\Database::query("
+                SELECT * FROM ai_lessons WHERE module_id = ? ORDER BY sort_order
+            ", [$module['id']]);
+        }
+
+        $course['modules'] = $modules;
+
         View::render('admin/ai-courses/curriculum', [
             'title' => 'Manage Curriculum',
-            'course' => $course['data']
+            'course' => $course
         ], 'admin');
     });
 
     $router->put('/ai-courses/{id}/curriculum', function ($id) {
-        global $api;
-
         $data = json_decode(file_get_contents('php://input'), true);
 
-        // Save modules
-        $result = ['success' => true];
-
-        // First, get existing modules to know what to delete/update
         foreach ($data['modules'] ?? [] as $moduleIndex => $module) {
-            if (isset($module['id'])) {
+            if (!empty($module['id'])) {
                 // Update existing module
-                $api->put('/admin/ai-modules/' . $module['id'], [
-                    'title' => $module['title'],
-                    'description' => $module['description'] ?? '',
-                    'order' => $moduleIndex + 1
-                ]);
+                \Core\Database::execute("
+                    UPDATE ai_modules SET title = ?, description = ?, sort_order = ? WHERE id = ?
+                ", [$module['title'], $module['description'] ?? '', $moduleIndex + 1, $module['id']]);
+                $moduleId = $module['id'];
             } else {
                 // Create new module
-                $moduleResult = $api->post('/admin/ai-courses/' . $id . '/modules', [
-                    'title' => $module['title'],
-                    'description' => $module['description'] ?? '',
-                    'order' => $moduleIndex + 1
-                ]);
-
-                if ($moduleResult['success']) {
-                    $module['id'] = $moduleResult['data']['id'];
-                }
+                \Core\Database::execute("
+                    INSERT INTO ai_modules (course_id, title, description, sort_order, created_at)
+                    VALUES (?, ?, ?, ?, NOW())
+                ", [$id, $module['title'], $module['description'] ?? '', $moduleIndex + 1]);
+                $moduleId = \Core\Database::lastInsertId();
             }
 
-            // Handle lessons for this module
-            if (isset($module['id'])) {
-                foreach ($module['lessons'] ?? [] as $lessonIndex => $lesson) {
-                    if (isset($lesson['id'])) {
-                        // Update existing lesson
-                        $api->put('/admin/ai-lessons/' . $lesson['id'], [
-                            'title' => $lesson['title'],
-                            'content' => $lesson['content'] ?? '',
-                            'objectives' => $lesson['objectives'] ?? '',
-                            'estimated_time' => $lesson['estimated_time'] ?? '',
-                            'order' => $lessonIndex + 1
-                        ]);
-                    } else {
-                        // Create new lesson
-                        $api->post('/admin/ai-modules/' . $module['id'] . '/lessons', [
-                            'title' => $lesson['title'],
-                            'content' => $lesson['content'] ?? '',
-                            'objectives' => $lesson['objectives'] ?? '',
-                            'estimated_time' => $lesson['estimated_time'] ?? '',
-                            'order' => $lessonIndex + 1
-                        ]);
-                    }
+            // Handle lessons
+            foreach ($module['lessons'] ?? [] as $lessonIndex => $lesson) {
+                if (!empty($lesson['id'])) {
+                    \Core\Database::execute("
+                        UPDATE ai_lessons SET title = ?, description = ?, teaching_notes = ?, estimated_minutes = ?, sort_order = ?
+                        WHERE id = ?
+                    ", [
+                        $lesson['title'],
+                        $lesson['description'] ?? '',
+                        $lesson['teaching_notes'] ?? '',
+                        $lesson['estimated_minutes'] ?? 15,
+                        $lessonIndex + 1,
+                        $lesson['id']
+                    ]);
+                } else {
+                    \Core\Database::execute("
+                        INSERT INTO ai_lessons (module_id, title, description, teaching_notes, estimated_minutes, sort_order, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, NOW())
+                    ", [
+                        $moduleId,
+                        $lesson['title'],
+                        $lesson['description'] ?? '',
+                        $lesson['teaching_notes'] ?? '',
+                        $lesson['estimated_minutes'] ?? 15,
+                        $lessonIndex + 1
+                    ]);
                 }
             }
         }
+
+        // Update lesson count
+        \Core\Database::execute("
+            UPDATE ai_courses SET total_lessons = (
+                SELECT COUNT(*) FROM ai_lessons l
+                JOIN ai_modules m ON l.module_id = m.id
+                WHERE m.course_id = ?
+            ) WHERE id = ?
+        ", [$id, $id]);
 
         View::json(['success' => true, 'message' => 'Curriculum saved']);
     });
 
     $router->delete('/ai-courses/{id}', function ($id) {
-        global $api;
+        $course = \Core\Database::queryOne("SELECT id FROM ai_courses WHERE id = ?", [$id]);
+        if (!$course) {
+            View::json(['success' => false, 'message' => 'Course not found'], 404);
+            return;
+        }
 
-        $result = $api->delete('/admin/ai-courses/' . $id);
-        View::json($result);
+        // Delete cascade - modules and lessons will be deleted automatically via FK
+        $deleted = \Core\Database::execute("DELETE FROM ai_courses WHERE id = ?", [$id]);
+
+        if ($deleted) {
+            View::json(['success' => true, 'message' => 'AI course deleted successfully']);
+        } else {
+            View::json(['success' => false, 'message' => 'Failed to delete course'], 500);
+        }
     });
 });
