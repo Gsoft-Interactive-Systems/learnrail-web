@@ -641,11 +641,29 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
 
     // Delete course (POST-based for JS compatibility)
     $router->post('/courses/{id}/delete', function ($id) {
+        header('Content-Type: application/json');
         try {
-            // First delete related records
-            \Core\Database::execute("DELETE FROM lesson_progress WHERE lesson_id IN (SELECT id FROM lessons WHERE course_id = ?)", [$id]);
-            \Core\Database::execute("DELETE FROM lessons WHERE course_id = ?", [$id]);
-            \Core\Database::execute("DELETE FROM enrollments WHERE course_id = ?", [$id]);
+            // Check if course exists first
+            $course = \Core\Database::queryOne("SELECT id FROM courses WHERE id = ?", [$id]);
+            if (!$course) {
+                echo json_encode(['success' => false, 'message' => 'Course not found']);
+                exit;
+            }
+
+            // Delete related records (ignore errors if tables/columns don't exist)
+            try {
+                \Core\Database::execute("DELETE FROM lesson_progress WHERE lesson_id IN (SELECT id FROM lessons WHERE course_id = ?)", [$id]);
+            } catch (\Exception $e) { /* ignore */ }
+
+            try {
+                \Core\Database::execute("DELETE FROM lessons WHERE course_id = ?", [$id]);
+            } catch (\Exception $e) { /* ignore */ }
+
+            try {
+                \Core\Database::execute("DELETE FROM enrollments WHERE course_id = ?", [$id]);
+            } catch (\Exception $e) { /* ignore */ }
+
+            // Delete the course itself
             \Core\Database::execute("DELETE FROM courses WHERE id = ?", [$id]);
 
             echo json_encode(['success' => true, 'message' => 'Course deleted successfully']);
@@ -997,11 +1015,13 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
             redirect('/admin/ai-courses');
         }
 
+        // Determine published status from 'status' field
+        $isPublished = ($_POST['status'] ?? 'draft') === 'published' ? 1 : 0;
+
         \Core\Database::execute("
             UPDATE ai_courses SET
                 title = ?,
                 description = ?,
-                short_description = ?,
                 category_id = ?,
                 level = ?,
                 is_published = ?
@@ -1009,10 +1029,9 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
         ", [
             $_POST['title'] ?? '',
             $_POST['description'] ?? '',
-            $_POST['short_description'] ?? '',
-            $_POST['category_id'] ?: null,
+            !empty($_POST['category_id']) ? (int)$_POST['category_id'] : null,
             $_POST['level'] ?? 'beginner',
-            isset($_POST['is_published']) ? 1 : 0,
+            $isPublished,
             $id
         ]);
 
