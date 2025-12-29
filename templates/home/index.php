@@ -7,7 +7,7 @@
 </div>
 
 <!-- Stats Grid -->
-<div class="grid grid-cols-3 mb-6">
+<div class="stats-grid mb-6">
     <?php Core\View::component('stat-card', [
         'icon' => 'medal',
         'color' => 'warning',
@@ -59,11 +59,11 @@
 <div class="mb-6">
     <h3 class="section-title mb-4">Quick Actions</h3>
     <div class="quick-actions">
-        <a href="/ai-tutor" class="quick-action">
+        <a href="/courses" class="quick-action">
             <div class="quick-action-icon primary">
-                <i class="iconoir-brain"></i>
+                <i class="iconoir-book"></i>
             </div>
-            <span>AI Tutor</span>
+            <span>Courses</span>
         </a>
         <a href="/career" class="quick-action">
             <div class="quick-action-icon success">

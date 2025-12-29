@@ -90,24 +90,6 @@
                     <?= csrf_field() ?>
 
                     <div class="form-group">
-                        <label class="form-label">Payment Gateway</label>
-                        <select name="payment_gateway" class="form-select">
-                            <option value="paystack" <?= ($settings['payment_gateway'] ?? '') === 'paystack' ? 'selected' : '' ?>>Paystack</option>
-                            <option value="flutterwave" <?= ($settings['payment_gateway'] ?? '') === 'flutterwave' ? 'selected' : '' ?>>Flutterwave</option>
-                        </select>
-                    </div>
-
-                    <div class="form-group">
-                        <label class="form-label">Paystack Public Key</label>
-                        <input type="text" name="paystack_public_key" class="form-input" value="<?= e($settings['paystack_public_key'] ?? '') ?>" placeholder="pk_...">
-                    </div>
-
-                    <div class="form-group">
-                        <label class="form-label">Paystack Secret Key</label>
-                        <input type="password" name="paystack_secret_key" class="form-input" value="<?= e($settings['paystack_secret_key'] ?? '') ?>" placeholder="sk_...">
-                    </div>
-
-                    <div class="form-group">
                         <label class="form-label">Currency</label>
                         <select name="currency" class="form-select">
                             <option value="NGN" <?= ($settings['currency'] ?? 'NGN') === 'NGN' ? 'selected' : '' ?>>NGN - Nigerian Naira</option>
@@ -115,8 +97,102 @@
                         </select>
                     </div>
 
+                    <h4 class="font-semibold mb-4 mt-6">Payment Methods</h4>
+                    <p class="text-sm text-secondary mb-4">Enable/disable payment methods shown to users during subscription checkout.</p>
+
+                    <!-- Paystack -->
+                    <div class="payment-method-card mb-4">
+                        <div class="d-flex justify-between items-center mb-3">
+                            <div class="d-flex items-center gap-3">
+                                <div class="payment-method-logo" style="background: #00C3F7;">
+                                    <i class="iconoir-credit-card" style="color: white;"></i>
+                                </div>
+                                <div>
+                                    <div class="font-semibold">Paystack</div>
+                                    <div class="text-sm text-secondary">Card payments, Bank transfer, USSD</div>
+                                </div>
+                            </div>
+                            <label class="switch">
+                                <input type="checkbox" name="paystack_enabled" value="1" <?= ($settings['paystack_enabled'] ?? true) ? 'checked' : '' ?>>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div class="form-group mb-0">
+                                <label class="form-label text-sm">Public Key</label>
+                                <input type="text" name="paystack_public_key" class="form-input" value="<?= e($settings['paystack_public_key'] ?? '') ?>" placeholder="pk_live_...">
+                            </div>
+                            <div class="form-group mb-0">
+                                <label class="form-label text-sm">Secret Key</label>
+                                <input type="password" name="paystack_secret_key" class="form-input" value="<?= e($settings['paystack_secret_key'] ?? '') ?>" placeholder="sk_live_...">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Flutterwave -->
+                    <div class="payment-method-card mb-4">
+                        <div class="d-flex justify-between items-center mb-3">
+                            <div class="d-flex items-center gap-3">
+                                <div class="payment-method-logo" style="background: #F5A623;">
+                                    <i class="iconoir-wallet" style="color: white;"></i>
+                                </div>
+                                <div>
+                                    <div class="font-semibold">Flutterwave</div>
+                                    <div class="text-sm text-secondary">Card, Mobile Money, Bank Transfer</div>
+                                </div>
+                            </div>
+                            <label class="switch">
+                                <input type="checkbox" name="flutterwave_enabled" value="1" <?= ($settings['flutterwave_enabled'] ?? false) ? 'checked' : '' ?>>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div class="form-group mb-0">
+                                <label class="form-label text-sm">Public Key</label>
+                                <input type="text" name="flutterwave_public_key" class="form-input" value="<?= e($settings['flutterwave_public_key'] ?? '') ?>" placeholder="FLWPUBK-...">
+                            </div>
+                            <div class="form-group mb-0">
+                                <label class="form-label text-sm">Secret Key</label>
+                                <input type="password" name="flutterwave_secret_key" class="form-input" value="<?= e($settings['flutterwave_secret_key'] ?? '') ?>" placeholder="FLWSECK-...">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Bank Transfer -->
+                    <div class="payment-method-card mb-4">
+                        <div class="d-flex justify-between items-center mb-3">
+                            <div class="d-flex items-center gap-3">
+                                <div class="payment-method-logo" style="background: var(--secondary);">
+                                    <i class="iconoir-bank" style="color: white;"></i>
+                                </div>
+                                <div>
+                                    <div class="font-semibold">Manual Bank Transfer</div>
+                                    <div class="text-sm text-secondary">Users transfer directly & upload proof</div>
+                                </div>
+                            </div>
+                            <label class="switch">
+                                <input type="checkbox" name="bank_transfer_enabled" value="1" <?= ($settings['bank_transfer_enabled'] ?? false) ? 'checked' : '' ?>>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div class="form-group mb-0">
+                                <label class="form-label text-sm">Bank Name</label>
+                                <input type="text" name="bank_name" class="form-input" value="<?= e($settings['bank_name'] ?? '') ?>" placeholder="e.g., GTBank">
+                            </div>
+                            <div class="form-group mb-0">
+                                <label class="form-label text-sm">Account Number</label>
+                                <input type="text" name="bank_account_number" class="form-input" value="<?= e($settings['bank_account_number'] ?? '') ?>" placeholder="0123456789">
+                            </div>
+                        </div>
+                        <div class="form-group mt-3 mb-0">
+                            <label class="form-label text-sm">Account Name</label>
+                            <input type="text" name="bank_account_name" class="form-input" value="<?= e($settings['bank_account_name'] ?? '') ?>" placeholder="e.g., Learnrail Ltd">
+                        </div>
+                    </div>
+
                     <div class="mt-6">
-                        <button type="submit" class="btn btn-primary">Save Changes</button>
+                        <button type="submit" class="btn btn-primary">Save Payment Settings</button>
                     </div>
                 </form>
             </div>

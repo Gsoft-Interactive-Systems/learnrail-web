@@ -674,6 +674,106 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
         ], 'admin');
     });
 
+    // Subscription Plans CRUD
+    $router->get('/subscriptions/plans/create', function () {
+        View::render('admin/subscriptions/edit-plan', [
+            'title' => 'Create Plan',
+            'plan' => null
+        ], 'admin');
+    });
+
+    $router->post('/subscriptions/plans/store', function () {
+        global $api;
+
+        if (!verify_csrf($_POST['_token'] ?? '')) {
+            flash('error', 'Invalid request');
+            redirect('/admin/subscriptions/plans/create');
+        }
+
+        $features = array_filter($_POST['features'] ?? [], fn($f) => !empty(trim($f)));
+
+        $result = $api->post('/admin/subscription-plans', [
+            'name' => $_POST['name'] ?? '',
+            'slug' => $_POST['slug'] ?? '',
+            'description' => $_POST['description'] ?? '',
+            'price' => $_POST['price'] ?? 0,
+            'original_price' => $_POST['original_price'] ?? null,
+            'duration_days' => $_POST['duration_days'] ?? 30,
+            'duration_months' => $_POST['duration_months'] ?? 1,
+            'features' => $features,
+            'is_active' => isset($_POST['is_active']),
+            'is_popular' => isset($_POST['is_popular']),
+            'includes_goal_tracker' => isset($_POST['includes_goal_tracker']),
+            'includes_accountability_partner' => isset($_POST['includes_accountability_partner'])
+        ]);
+
+        if ($result['success']) {
+            flash('success', 'Plan created successfully');
+            redirect('/admin/subscriptions');
+        } else {
+            flash('error', $result['data']['message'] ?? 'Failed to create plan');
+            $_SESSION['old_input'] = $_POST;
+            redirect('/admin/subscriptions/plans/create');
+        }
+    });
+
+    $router->get('/subscriptions/plans/{id}/edit', function ($id) {
+        global $api;
+
+        $plan = $api->get('/admin/subscription-plans/' . $id);
+
+        if (!$plan['success']) {
+            flash('error', 'Plan not found');
+            redirect('/admin/subscriptions');
+        }
+
+        View::render('admin/subscriptions/edit-plan', [
+            'title' => 'Edit Plan',
+            'plan' => $plan['data']
+        ], 'admin');
+    });
+
+    $router->post('/subscriptions/plans/{id}/update', function ($id) {
+        global $api;
+
+        if (!verify_csrf($_POST['_token'] ?? '')) {
+            flash('error', 'Invalid request');
+            redirect('/admin/subscriptions/plans/' . $id . '/edit');
+        }
+
+        $features = array_filter($_POST['features'] ?? [], fn($f) => !empty(trim($f)));
+
+        $result = $api->put('/admin/subscription-plans/' . $id, [
+            'name' => $_POST['name'] ?? '',
+            'slug' => $_POST['slug'] ?? '',
+            'description' => $_POST['description'] ?? '',
+            'price' => $_POST['price'] ?? 0,
+            'original_price' => $_POST['original_price'] ?? null,
+            'duration_days' => $_POST['duration_days'] ?? 30,
+            'duration_months' => $_POST['duration_months'] ?? 1,
+            'features' => $features,
+            'is_active' => isset($_POST['is_active']),
+            'is_popular' => isset($_POST['is_popular']),
+            'includes_goal_tracker' => isset($_POST['includes_goal_tracker']),
+            'includes_accountability_partner' => isset($_POST['includes_accountability_partner'])
+        ]);
+
+        if ($result['success']) {
+            flash('success', 'Plan updated successfully');
+            redirect('/admin/subscriptions');
+        } else {
+            flash('error', $result['data']['message'] ?? 'Failed to update plan');
+            redirect('/admin/subscriptions/plans/' . $id . '/edit');
+        }
+    });
+
+    $router->delete('/subscriptions/plans/{id}/delete', function ($id) {
+        global $api;
+
+        $result = $api->delete('/admin/subscription-plans/' . $id);
+        View::json($result);
+    });
+
     // Reports
     $router->get('/reports', function () {
         global $api;

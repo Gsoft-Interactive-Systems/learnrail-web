@@ -30,11 +30,7 @@
         </div>
 
         <div class="nav-section">
-            <div class="nav-section-title">Learn</div>
-            <a href="/ai-tutor" class="nav-item <?= str_starts_with($_SERVER['REQUEST_URI'], '/ai-tutor') ? 'active' : '' ?>">
-                <i class="iconoir-brain"></i>
-                <span>AI Tutor</span>
-            </a>
+            <div class="nav-section-title">Explore</div>
             <a href="/career" class="nav-item <?= str_starts_with($_SERVER['REQUEST_URI'], '/career') ? 'active' : '' ?>">
                 <i class="iconoir-suitcase"></i>
                 <span>Career Guide</span>
