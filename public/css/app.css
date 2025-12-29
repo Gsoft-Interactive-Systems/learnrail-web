@@ -1454,9 +1454,44 @@ a:hover { color: var(--primary-dark); }
     }
 }
 
+/* Sidebar Overlay */
+.sidebar-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 99;
+    opacity: 0;
+    visibility: hidden;
+    transition: var(--transition);
+    -webkit-tap-highlight-color: transparent;
+    cursor: pointer;
+}
+
+.sidebar-overlay.active {
+    opacity: 1;
+    visibility: visible;
+}
+
+/* Prevent body scroll when sidebar is open (mobile) */
+body.sidebar-open {
+    overflow: hidden;
+}
+
 /* ============================================
    RESPONSIVE
    ============================================ */
+
+/* Prevent horizontal scroll on body */
+html, body {
+    overflow-x: hidden;
+    max-width: 100vw;
+}
+
+.app-shell {
+    overflow-x: hidden;
+    max-width: 100vw;
+}
+
 @media (max-width: 1024px) {
     .sidebar {
         transform: translateX(-100%);
@@ -1469,6 +1504,8 @@ a:hover { color: var(--primary-dark); }
 
     .main-content {
         margin-left: 0;
+        max-width: 100vw;
+        overflow-x: hidden;
     }
 
     .menu-toggle {
@@ -1496,6 +1533,8 @@ a:hover { color: var(--primary-dark); }
     .page-content {
         padding: 16px;
         padding-bottom: calc(var(--mobile-nav-height) + 16px);
+        max-width: 100vw;
+        overflow-x: hidden;
     }
 
     .grid-cols-2,
@@ -1517,6 +1556,62 @@ a:hover { color: var(--primary-dark); }
 
     .chat-message {
         max-width: 90%;
+    }
+
+    /* Fix scroll container to not cause page overflow */
+    .scroll-container {
+        margin-left: -16px;
+        margin-right: -16px;
+        padding-left: 16px;
+        padding-right: 16px;
+        max-width: 100vw;
+    }
+
+    /* Smaller course cards on mobile */
+    .course-card.compact {
+        width: 220px !important;
+        min-width: 220px;
+    }
+
+    /* Continue learning card - make responsive */
+    .card-body .d-flex.gap-4.items-center {
+        flex-direction: column;
+        align-items: stretch !important;
+        gap: 12px !important;
+    }
+
+    .card-body .d-flex.gap-4.items-center > img {
+        width: 100% !important;
+        height: 140px !important;
+    }
+
+    .card-body .d-flex.gap-4.items-center .btn {
+        width: 100%;
+        margin-top: 8px;
+    }
+
+    .card-body .d-flex.gap-4.items-center .progress-bar {
+        max-width: 100% !important;
+    }
+
+    /* Quick actions grid - 2 columns on mobile */
+    .quick-actions {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 12px;
+    }
+
+    .quick-action {
+        padding: 16px 12px;
+    }
+
+    .quick-action-icon {
+        width: 44px;
+        height: 44px;
+        font-size: 1.25rem;
+    }
+
+    .quick-action span {
+        font-size: 0.75rem;
     }
 }
 

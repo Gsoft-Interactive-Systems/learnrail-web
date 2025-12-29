@@ -79,21 +79,46 @@ const Modal = {
 // SIDEBAR TOGGLE (Mobile)
 // ============================================
 const Sidebar = {
+    init() {
+        // Setup overlay click/touch handler
+        const overlay = document.querySelector('.sidebar-overlay');
+        if (overlay) {
+            overlay.addEventListener('click', (e) => {
+                e.preventDefault();
+                this.close();
+            });
+            overlay.addEventListener('touchend', (e) => {
+                e.preventDefault();
+                this.close();
+            });
+        }
+
+        // Close sidebar when clicking on main content area (mobile)
+        const mainContent = document.querySelector('.main-content');
+        if (mainContent) {
+            mainContent.addEventListener('click', (e) => {
+                const sidebar = document.querySelector('.sidebar');
+                if (sidebar && sidebar.classList.contains('open')) {
+                    // Don't close if clicking a link or button
+                    if (!e.target.closest('a') && !e.target.closest('button')) {
+                        this.close();
+                    }
+                }
+            });
+        }
+    },
+
     toggle() {
         const sidebar = document.querySelector('.sidebar');
         const overlay = document.querySelector('.sidebar-overlay');
 
         if (sidebar) {
             sidebar.classList.toggle('open');
+            document.body.classList.toggle('sidebar-open', sidebar.classList.contains('open'));
 
-            if (!overlay) {
-                const newOverlay = document.createElement('div');
-                newOverlay.className = 'sidebar-overlay';
-                newOverlay.onclick = () => this.close();
-                document.body.appendChild(newOverlay);
+            if (overlay) {
+                overlay.classList.toggle('active', sidebar.classList.contains('open'));
             }
-
-            document.querySelector('.sidebar-overlay')?.classList.toggle('active', sidebar.classList.contains('open'));
         }
     },
 
@@ -107,6 +132,7 @@ const Sidebar = {
         if (overlay) {
             overlay.classList.remove('active');
         }
+        document.body.classList.remove('sidebar-open');
     }
 };
 
@@ -457,6 +483,9 @@ document.addEventListener('alpine:init', () => {
 document.addEventListener('DOMContentLoaded', () => {
     // Initialize toast container
     Toast.init();
+
+    // Initialize sidebar (mobile menu)
+    Sidebar.init();
 
     // Close dropdowns when clicking outside
     document.addEventListener('click', (e) => {
