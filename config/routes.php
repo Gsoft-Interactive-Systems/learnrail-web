@@ -555,86 +555,192 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
 
     // Courses
     $router->get('/courses', function () {
-        global $api;
-
         $page = (int)($_GET['page'] ?? 1);
-        $courses = $api->get('/admin/courses', ['page' => $page, 'per_page' => 20]);
+        $perPage = 20;
+        $offset = ($page - 1) * $perPage;
+
+        $search = $_GET['search'] ?? '';
+        $category = $_GET['category'] ?? '';
+        $level = $_GET['level'] ?? '';
+        $status = $_GET['status'] ?? '';
+
+        $where = "1=1";
+        $params = [];
+
+        if ($search) {
+            $where .= " AND (title LIKE ? OR description LIKE ?)";
+            $params[] = "%{$search}%";
+            $params[] = "%{$search}%";
+        }
+        if ($category) {
+            $where .= " AND category_id = ?";
+            $params[] = $category;
+        }
+        if ($level) {
+            $where .= " AND level = ?";
+            $params[] = $level;
+        }
+        if ($status) {
+            $where .= " AND status = ?";
+            $params[] = $status;
+        }
+
+        $total = (int) \Core\Database::scalar("SELECT COUNT(*) FROM courses WHERE {$where}", $params);
+
+        $params[] = $perPage;
+        $params[] = $offset;
+        $courses = \Core\Database::query("
+            SELECT c.*, cat.name as category_name,
+                   (SELECT COUNT(*) FROM lessons WHERE course_id = c.id) as lesson_count,
+                   (SELECT COUNT(*) FROM enrollments WHERE course_id = c.id) as enrollment_count
+            FROM courses c
+            LEFT JOIN categories cat ON c.category_id = cat.id
+            WHERE {$where}
+            ORDER BY c.created_at DESC
+            LIMIT ? OFFSET ?
+        ", $params);
+
+        $categories = \Core\Database::query("SELECT * FROM categories ORDER BY name");
 
         View::render('admin/courses/index', [
             'title' => 'Manage Courses',
-            'courses' => $courses['data']['data'] ?? $courses['data'] ?? [],
-            'meta' => $courses['data']['meta'] ?? []
+            'courses' => $courses,
+            'categories' => $categories,
+            'totalCourses' => $total,
+            'currentPage' => $page,
+            'totalPages' => ceil($total / $perPage)
         ], 'admin');
     });
 
     $router->get('/courses/create', function () {
-        global $api;
-
-        $categories = $api->get('/admin/categories');
-        $instructors = $api->get('/admin/instructors');
+        $categories = \Core\Database::query("SELECT * FROM categories ORDER BY name");
 
         View::render('admin/courses/form', [
             'title' => 'Create Course',
             'course' => null,
-            'categories' => $categories['data'] ?? [],
-            'instructors' => $instructors['data'] ?? []
+            'categories' => $categories,
+            'instructors' => []
         ], 'admin');
     });
 
     $router->post('/courses/create', function () {
-        global $api;
-
         if (!verify_csrf($_POST['_token'] ?? '')) {
             flash('error', 'Invalid request');
             redirect('/admin/courses/create');
         }
 
-        $result = $api->post('/admin/courses', $_POST);
+        $title = trim($_POST['title'] ?? '');
+        if (empty($title)) {
+            flash('error', 'Title is required');
+            $_SESSION['old_input'] = $_POST;
+            redirect('/admin/courses/create');
+        }
 
-        if ($result['success']) {
+        // Generate slug
+        $slug = strtolower(trim(preg_replace('/[^A-Za-z0-9-]+/', '-', $title)));
+        $existingSlug = \Core\Database::scalar("SELECT COUNT(*) FROM courses WHERE slug = ?", [$slug]);
+        if ($existingSlug > 0) {
+            $slug .= '-' . time();
+        }
+
+        try {
+            \Core\Database::execute("
+                INSERT INTO courses (title, slug, description, instructor, duration, category_id, level, status, is_premium, tags, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+            ", [
+                $title,
+                $slug,
+                $_POST['description'] ?? '',
+                $_POST['instructor'] ?? '',
+                $_POST['duration'] ?? '',
+                !empty($_POST['category_id']) ? (int)$_POST['category_id'] : null,
+                $_POST['level'] ?? 'beginner',
+                $_POST['status'] ?? 'draft',
+                isset($_POST['is_premium']) ? 1 : 0,
+                $_POST['tags'] ?? ''
+            ]);
+
             flash('success', 'Course created successfully');
             redirect('/admin/courses');
-        } else {
-            flash('error', $result['data']['message'] ?? 'Failed to create course');
+        } catch (\Exception $e) {
+            error_log("Course creation error: " . $e->getMessage());
+            flash('error', 'Failed to create course: ' . $e->getMessage());
             $_SESSION['old_input'] = $_POST;
             redirect('/admin/courses/create');
         }
     });
 
     $router->get('/courses/{id}/edit', function ($id) {
-        global $api;
+        $course = \Core\Database::queryOne("
+            SELECT c.*, cat.name as category_name
+            FROM courses c
+            LEFT JOIN categories cat ON c.category_id = cat.id
+            WHERE c.id = ?
+        ", [$id]);
 
-        $course = $api->get('/admin/courses/' . $id);
-        $categories = $api->get('/admin/categories');
-        $instructors = $api->get('/admin/instructors');
-
-        if (!$course['success']) {
+        if (!$course) {
             View::error(404, 'Course not found');
         }
 
+        // Get lessons for this course
+        $course['lessons'] = \Core\Database::query("
+            SELECT * FROM lessons WHERE course_id = ? ORDER BY sort_order, id
+        ", [$id]);
+
+        $categories = \Core\Database::query("SELECT * FROM categories ORDER BY name");
+
         View::render('admin/courses/form', [
             'title' => 'Edit Course',
-            'course' => $course['data'],
-            'categories' => $categories['data'] ?? [],
-            'instructors' => $instructors['data'] ?? []
+            'course' => $course,
+            'categories' => $categories,
+            'instructors' => []
         ], 'admin');
     });
 
     $router->post('/courses/{id}/edit', function ($id) {
-        global $api;
-
         if (!verify_csrf($_POST['_token'] ?? '')) {
             flash('error', 'Invalid request');
             redirect('/admin/courses/' . $id . '/edit');
         }
 
-        $result = $api->put('/admin/courses/' . $id, $_POST);
+        $course = \Core\Database::queryOne("SELECT id FROM courses WHERE id = ?", [$id]);
+        if (!$course) {
+            flash('error', 'Course not found');
+            redirect('/admin/courses');
+        }
 
-        if ($result['success']) {
+        try {
+            \Core\Database::execute("
+                UPDATE courses SET
+                    title = ?,
+                    description = ?,
+                    instructor = ?,
+                    duration = ?,
+                    category_id = ?,
+                    level = ?,
+                    status = ?,
+                    is_premium = ?,
+                    tags = ?,
+                    updated_at = NOW()
+                WHERE id = ?
+            ", [
+                $_POST['title'] ?? '',
+                $_POST['description'] ?? '',
+                $_POST['instructor'] ?? '',
+                $_POST['duration'] ?? '',
+                !empty($_POST['category_id']) ? (int)$_POST['category_id'] : null,
+                $_POST['level'] ?? 'beginner',
+                $_POST['status'] ?? 'draft',
+                isset($_POST['is_premium']) ? 1 : 0,
+                $_POST['tags'] ?? '',
+                $id
+            ]);
+
             flash('success', 'Course updated successfully');
             redirect('/admin/courses');
-        } else {
-            flash('error', $result['data']['message'] ?? 'Failed to update course');
+        } catch (\Exception $e) {
+            error_log("Course update error: " . $e->getMessage());
+            flash('error', 'Failed to update course: ' . $e->getMessage());
             redirect('/admin/courses/' . $id . '/edit');
         }
     });
