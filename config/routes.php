@@ -587,8 +587,7 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
 
         $total = (int) \Core\Database::scalar("SELECT COUNT(*) FROM courses WHERE {$where}", $params);
 
-        $params[] = $perPage;
-        $params[] = $offset;
+        // Note: LIMIT/OFFSET are integers, safe to interpolate directly
         $courses = \Core\Database::query("
             SELECT c.*, cat.name as category_name,
                    (SELECT COUNT(*) FROM lessons WHERE course_id = c.id) as lesson_count,
@@ -597,7 +596,7 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
             LEFT JOIN categories cat ON c.category_id = cat.id
             WHERE {$where}
             ORDER BY c.created_at DESC
-            LIMIT ? OFFSET ?
+            LIMIT {$perPage} OFFSET {$offset}
         ", $params);
 
         $categories = \Core\Database::query("SELECT * FROM categories ORDER BY name");
@@ -1004,9 +1003,7 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
         // Get total count
         $total = (int) \Core\Database::scalar("SELECT COUNT(*) FROM ai_courses WHERE {$where}", $params);
 
-        // Get courses with counts
-        $params[] = $perPage;
-        $params[] = $offset;
+        // Get courses with counts (LIMIT/OFFSET as integers, safe to interpolate)
         $courses = \Core\Database::query("
             SELECT c.*,
                    (SELECT COUNT(*) FROM ai_modules WHERE course_id = c.id) as module_count,
@@ -1015,7 +1012,7 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
             FROM ai_courses c
             WHERE {$where}
             ORDER BY c.created_at DESC
-            LIMIT ? OFFSET ?
+            LIMIT {$perPage} OFFSET {$offset}
         ", $params);
 
         View::render('admin/ai-courses/index', [
