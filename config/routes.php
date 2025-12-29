@@ -916,26 +916,38 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
             $slug .= '-' . time();
         }
 
-        \Core\Database::execute("
-            INSERT INTO ai_courses (title, slug, description, short_description, category_id, level, is_published, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
-        ", [
-            $title,
-            $slug,
-            $_POST['description'] ?? '',
-            $_POST['short_description'] ?? '',
-            $_POST['category_id'] ?: null,
-            $_POST['level'] ?? 'beginner',
-            isset($_POST['is_published']) ? 1 : 0
-        ]);
+        // Determine if published based on status field
+        $isPublished = ($_POST['status'] ?? 'draft') === 'published' ? 1 : 0;
+        $categoryId = !empty($_POST['category_id']) ? (int)$_POST['category_id'] : null;
 
-        $courseId = \Core\Database::lastInsertId();
+        try {
+            $pdo = \Core\Database::getConnection();
+            $stmt = $pdo->prepare("
+                INSERT INTO ai_courses (title, slug, description, category_id, level, is_published, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, NOW())
+            ");
+            $stmt->execute([
+                $title,
+                $slug,
+                $_POST['description'] ?? '',
+                $categoryId,
+                $_POST['level'] ?? 'beginner',
+                $isPublished
+            ]);
 
-        if ($courseId) {
-            flash('success', 'AI Course created successfully');
-            redirect('/admin/ai-courses/' . $courseId . '/curriculum');
-        } else {
-            flash('error', 'Failed to create AI course');
+            $courseId = $pdo->lastInsertId();
+
+            if ($courseId) {
+                flash('success', 'AI Course created successfully');
+                redirect('/admin/ai-courses/' . $courseId . '/curriculum');
+            } else {
+                flash('error', 'Failed to create AI course - no ID returned');
+                $_SESSION['old_input'] = $_POST;
+                redirect('/admin/ai-courses/create');
+            }
+        } catch (\PDOException $e) {
+            error_log("AI Course creation error: " . $e->getMessage());
+            flash('error', 'Database error: ' . $e->getMessage());
             $_SESSION['old_input'] = $_POST;
             redirect('/admin/ai-courses/create');
         }
@@ -1078,19 +1090,50 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
     });
 
     $router->delete('/ai-courses/{id}', function ($id) {
-        $course = \Core\Database::queryOne("SELECT id FROM ai_courses WHERE id = ?", [$id]);
-        if (!$course) {
-            View::json(['success' => false, 'message' => 'Course not found'], 404);
-            return;
-        }
+        try {
+            $pdo = \Core\Database::getConnection();
 
-        // Delete cascade - modules and lessons will be deleted automatically via FK
-        $deleted = \Core\Database::execute("DELETE FROM ai_courses WHERE id = ?", [$id]);
+            $stmt = $pdo->prepare("SELECT id FROM ai_courses WHERE id = ?");
+            $stmt->execute([$id]);
+            $course = $stmt->fetch();
 
-        if ($deleted) {
+            if (!$course) {
+                View::json(['success' => false, 'message' => 'Course not found'], 404);
+                return;
+            }
+
+            // Delete cascade - modules and lessons will be deleted automatically via FK
+            $stmt = $pdo->prepare("DELETE FROM ai_courses WHERE id = ?");
+            $stmt->execute([$id]);
+
             View::json(['success' => true, 'message' => 'AI course deleted successfully']);
-        } else {
-            View::json(['success' => false, 'message' => 'Failed to delete course'], 500);
+        } catch (\PDOException $e) {
+            error_log("AI Course delete error: " . $e->getMessage());
+            View::json(['success' => false, 'message' => 'Database error: ' . $e->getMessage()], 500);
+        }
+    });
+
+    // POST-based delete (fallback for servers that don't support DELETE)
+    $router->post('/ai-courses/{id}/delete', function ($id) {
+        try {
+            $pdo = \Core\Database::getConnection();
+
+            $stmt = $pdo->prepare("SELECT id FROM ai_courses WHERE id = ?");
+            $stmt->execute([$id]);
+            $course = $stmt->fetch();
+
+            if (!$course) {
+                View::json(['success' => false, 'message' => 'Course not found'], 404);
+                return;
+            }
+
+            $stmt = $pdo->prepare("DELETE FROM ai_courses WHERE id = ?");
+            $stmt->execute([$id]);
+
+            View::json(['success' => true, 'message' => 'AI course deleted successfully']);
+        } catch (\PDOException $e) {
+            error_log("AI Course delete error: " . $e->getMessage());
+            View::json(['success' => false, 'message' => 'Database error: ' . $e->getMessage()], 500);
         }
     });
 });

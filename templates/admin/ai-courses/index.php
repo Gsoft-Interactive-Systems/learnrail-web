@@ -156,10 +156,13 @@ function confirmDelete(id) {
 
 async function deleteCourse(id) {
     try {
-        const response = await API.delete('/admin/ai-courses/' + id);
+        // Use POST endpoint for better compatibility
+        const response = await API.post('/admin/ai-courses/' + id + '/delete');
         if (response.success) {
             Toast.success('AI course deleted successfully');
             location.reload();
+        } else {
+            Toast.error(response.message || 'Failed to delete course');
         }
     } catch (error) {
         Toast.error(error.message || 'Failed to delete course');
