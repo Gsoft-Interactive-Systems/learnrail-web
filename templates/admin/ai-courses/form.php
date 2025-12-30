@@ -88,6 +88,45 @@ $title = $isEdit ? 'Edit AI Course' : 'Create AI Course';
                 </div>
             </div>
 
+            <!-- Quick Curriculum Setup -->
+            <?php if (!$isEdit): ?>
+            <div class="card mb-6">
+                <div class="card-header">
+                    <h3 class="card-title"><i class="iconoir-flash text-warning"></i> Quick Curriculum Setup</h3>
+                </div>
+                <div class="card-body">
+                    <div class="alert alert-info mb-4">
+                        <i class="iconoir-info-circle"></i>
+                        <div>
+                            <strong>Paste Your Curriculum</strong>
+                            <p class="mb-0">Paste a structured curriculum below and it will automatically create modules and lessons. Use the format shown in the placeholder.</p>
+                        </div>
+                    </div>
+                    <div class="form-group mb-0">
+                        <label class="form-label" for="curriculum_text">Curriculum Content</label>
+                        <textarea id="curriculum_text" name="curriculum_text" class="form-textarea" rows="15"
+                                  placeholder="Module 1: Introduction to the Topic
+- Lesson 1: What is This Topic?
+- Lesson 2: History and Background
+- Lesson 3: Key Concepts Overview
+
+Module 2: Core Fundamentals
+- Lesson 1: Understanding the Basics
+- Lesson 2: Common Terminology
+- Lesson 3: Practical Applications
+
+Module 3: Advanced Concepts
+- Lesson 1: Deep Dive into Advanced Topics
+- Lesson 2: Real-World Case Studies
+- Lesson 3: Best Practices"></textarea>
+                        <p class="text-sm text-secondary mt-2">
+                            <strong>Format:</strong> Start each module with "Module X:" and each lesson with "- Lesson X:". The AI tutor will use these as teaching guidelines.
+                        </p>
+                    </div>
+                </div>
+            </div>
+            <?php endif; ?>
+
             <!-- Curriculum Preview (Edit Mode Only) -->
             <?php if ($isEdit): ?>
             <div class="card">

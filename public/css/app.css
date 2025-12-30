@@ -759,6 +759,17 @@ a:hover { color: var(--primary-dark); }
     border-radius: var(--radius-full);
 }
 
+.course-card-badge.ai-badge {
+    background: linear-gradient(135deg, #8B5CF6 0%, #6366F1 100%);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.course-card-badge.ai-badge i {
+    font-size: 0.875rem;
+}
+
 .course-card-body {
     padding: 16px;
 }

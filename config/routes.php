@@ -41,6 +41,151 @@ $router->get('/api/plans', function () {
     exit;
 });
 
+// AI Tutor Chat API (requires authentication)
+$router->post('/api/ai-tutor/chat', function () {
+    global $auth;
+
+    header('Content-Type: application/json');
+
+    // Check authentication
+    if (!$auth->check()) {
+        http_response_code(401);
+        echo json_encode(['success' => false, 'error' => 'Unauthorized']);
+        exit;
+    }
+
+    // Get JSON input
+    $input = json_decode(file_get_contents('php://input'), true);
+
+    $courseId = $input['course_id'] ?? 0;
+    $lessonId = $input['lesson_id'] ?? 0;
+    $message = trim($input['message'] ?? '');
+    $history = $input['history'] ?? [];
+
+    if (empty($message)) {
+        echo json_encode(['success' => false, 'error' => 'Message is required']);
+        exit;
+    }
+
+    // Get course and lesson context
+    $course = \Core\Database::queryOne("SELECT * FROM ai_courses WHERE id = ?", [$courseId]);
+    $lesson = \Core\Database::queryOne("SELECT * FROM ai_lessons WHERE id = ?", [$lessonId]);
+
+    if (!$course) {
+        echo json_encode(['success' => false, 'error' => 'Course not found']);
+        exit;
+    }
+
+    // Build system prompt with course context
+    $systemPrompt = "You are an AI tutor for the course: {$course['title']}.\n";
+    if (!empty($course['ai_instructions'])) {
+        $systemPrompt .= "Teaching instructions: {$course['ai_instructions']}\n";
+    }
+    if ($lesson) {
+        $systemPrompt .= "Current lesson: {$lesson['title']}\n";
+        if (!empty($lesson['content_outline'])) {
+            $systemPrompt .= "Lesson content to teach:\n{$lesson['content_outline']}\n";
+        }
+    }
+    $systemPrompt .= "\nBe helpful, encouraging, and educational. Use simple language and provide examples when helpful.";
+
+    // Get AI API key from settings
+    $apiKey = \Core\Database::scalar("SELECT value FROM settings WHERE `key` = 'openai_api_key'");
+
+    if (empty($apiKey)) {
+        echo json_encode([
+            'success' => false,
+            'error' => 'AI Tutor is not configured. The OpenAI API key is missing. Please add "openai_api_key" in Admin > Settings to enable the AI tutor.'
+        ]);
+        exit;
+    }
+
+    // Call OpenAI API
+    try {
+        $messages = [['role' => 'system', 'content' => $systemPrompt]];
+
+        // Add chat history
+        foreach ($history as $msg) {
+            $messages[] = [
+                'role' => $msg['role'] === 'user' ? 'user' : 'assistant',
+                'content' => $msg['content']
+            ];
+        }
+
+        // Add current message
+        $messages[] = ['role' => 'user', 'content' => $message];
+
+        $ch = curl_init('https://api.openai.com/v1/chat/completions');
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST => true,
+            CURLOPT_HTTPHEADER => [
+                'Content-Type: application/json',
+                'Authorization: Bearer ' . $apiKey
+            ],
+            CURLOPT_POSTFIELDS => json_encode([
+                'model' => 'gpt-3.5-turbo',
+                'messages' => $messages,
+                'max_tokens' => 1000,
+                'temperature' => 0.7
+            ]),
+            CURLOPT_TIMEOUT => 30
+        ]);
+
+        $result = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlError = curl_error($ch);
+        curl_close($ch);
+
+        if ($curlError) {
+            error_log("AI Tutor cURL Error: " . $curlError);
+            echo json_encode([
+                'success' => false,
+                'error' => 'Failed to connect to AI service. Error: ' . $curlError
+            ]);
+            exit;
+        }
+
+        if ($httpCode === 200) {
+            $data = json_decode($result, true);
+            $aiResponse = $data['choices'][0]['message']['content'] ?? null;
+            if ($aiResponse) {
+                echo json_encode(['success' => true, 'response' => $aiResponse]);
+            } else {
+                echo json_encode([
+                    'success' => false,
+                    'error' => 'AI returned an empty response. Please try again.'
+                ]);
+            }
+        } elseif ($httpCode === 401) {
+            echo json_encode([
+                'success' => false,
+                'error' => 'Invalid OpenAI API key. Please check your API key in Admin > Settings.'
+            ]);
+        } elseif ($httpCode === 429) {
+            echo json_encode([
+                'success' => false,
+                'error' => 'OpenAI rate limit exceeded. Please wait a moment and try again.'
+            ]);
+        } else {
+            $errorData = json_decode($result, true);
+            $errorMsg = $errorData['error']['message'] ?? 'Unknown error';
+            error_log("AI Tutor API Error (HTTP $httpCode): " . $errorMsg);
+            echo json_encode([
+                'success' => false,
+                'error' => "AI service error (HTTP $httpCode): $errorMsg"
+            ]);
+        }
+    } catch (\Exception $e) {
+        error_log("AI Tutor Exception: " . $e->getMessage());
+        echo json_encode([
+            'success' => false,
+            'error' => 'An error occurred: ' . $e->getMessage()
+        ]);
+    }
+    exit;
+});
+
 // ===========================================
 // PUBLIC ROUTES (No authentication required)
 // ===========================================
@@ -189,35 +334,62 @@ $router->group(['middleware' => 'auth'], function ($router) {
         $category = $_GET['category'] ?? '';
         $level = $_GET['level'] ?? '';
 
-        $where = "c.is_published = 1";
+        // Build WHERE clauses for both regular and AI courses
+        $whereRegular = "c.is_published = 1";
+        $whereAI = "ac.is_published = 1";
         $params = [];
+        $paramsAI = [];
 
         if ($search) {
-            $where .= " AND (c.title LIKE ? OR c.description LIKE ?)";
+            $whereRegular .= " AND (c.title LIKE ? OR c.description LIKE ?)";
             $params[] = "%{$search}%";
             $params[] = "%{$search}%";
+            $whereAI .= " AND (ac.title LIKE ? OR ac.description LIKE ?)";
+            $paramsAI[] = "%{$search}%";
+            $paramsAI[] = "%{$search}%";
         }
         if ($category) {
-            $where .= " AND c.category_id = ?";
+            $whereRegular .= " AND c.category_id = ?";
             $params[] = $category;
+            $whereAI .= " AND ac.category_id = ?";
+            $paramsAI[] = $category;
         }
         if ($level) {
-            $where .= " AND c.level = ?";
+            $whereRegular .= " AND c.level = ?";
             $params[] = $level;
+            $whereAI .= " AND ac.level = ?";
+            $paramsAI[] = $level;
         }
 
-        $total = (int) \Core\Database::scalar("SELECT COUNT(*) FROM courses c WHERE {$where}", $params);
+        // Count total from both tables
+        $totalRegular = (int) \Core\Database::scalar("SELECT COUNT(*) FROM courses c WHERE {$whereRegular}", $params);
+        $totalAI = (int) \Core\Database::scalar("SELECT COUNT(*) FROM ai_courses ac WHERE {$whereAI}", $paramsAI);
+        $total = $totalRegular + $totalAI;
 
+        // Combined query using UNION
+        $allParams = array_merge($params, $paramsAI);
         $courses = \Core\Database::query("
-            SELECT c.*, cat.name as category_name, i.name as instructor_name,
-                   (SELECT COUNT(*) FROM lessons l JOIN modules m ON l.module_id = m.id WHERE m.course_id = c.id) as lesson_count
+            (SELECT c.id, c.title, c.slug, c.description, c.thumbnail, c.level, c.rating,
+                   c.duration_hours, c.is_featured, c.is_free, c.created_at,
+                   cat.name as category_name, i.name as instructor_name,
+                   (SELECT COUNT(*) FROM lessons l JOIN modules m ON l.module_id = m.id WHERE m.course_id = c.id) as total_lessons,
+                   0 as is_ai_course
             FROM courses c
             LEFT JOIN categories cat ON c.category_id = cat.id
             LEFT JOIN instructors i ON c.instructor_id = i.id
-            WHERE {$where}
-            ORDER BY c.is_featured DESC, c.created_at DESC
+            WHERE {$whereRegular})
+            UNION ALL
+            (SELECT ac.id, ac.title, ac.slug, ac.description, ac.thumbnail, ac.level, 0 as rating,
+                   0 as duration_hours, 0 as is_featured, 0 as is_free, ac.created_at,
+                   cat.name as category_name, 'AI Tutor' as instructor_name,
+                   (SELECT COUNT(*) FROM ai_lessons l JOIN ai_modules m ON l.module_id = m.id WHERE m.course_id = ac.id) as total_lessons,
+                   1 as is_ai_course
+            FROM ai_courses ac
+            LEFT JOIN categories cat ON ac.category_id = cat.id
+            WHERE {$whereAI})
+            ORDER BY is_featured DESC, created_at DESC
             LIMIT {$perPage} OFFSET {$offset}
-        ", $params);
+        ", $allParams);
 
         $categories = \Core\Database::query("SELECT * FROM categories WHERE is_active = 1 ORDER BY sort_order, name");
 
@@ -368,6 +540,146 @@ $router->group(['middleware' => 'auth'], function ($router) {
 
         flash('success', 'Successfully enrolled in course!');
         redirect('/courses/' . $id);
+    });
+
+    // AI Courses - User-facing routes
+    $router->get('/ai-courses/{id}', function ($id) {
+        global $auth;
+        $userId = $auth->user()['id'] ?? 0;
+
+        // Get AI course with modules and lessons
+        $course = \Core\Database::queryOne("
+            SELECT ac.*, cat.name as category_name
+            FROM ai_courses ac
+            LEFT JOIN categories cat ON ac.category_id = cat.id
+            WHERE ac.id = ? AND ac.is_published = 1
+        ", [$id]);
+
+        if (!$course) {
+            View::error(404, 'Course not found');
+        }
+
+        // Get modules with lessons
+        $modules = \Core\Database::query("
+            SELECT * FROM ai_modules WHERE course_id = ? ORDER BY sort_order, id
+        ", [$course['id']]);
+
+        foreach ($modules as &$module) {
+            $module['lessons'] = \Core\Database::query("
+                SELECT * FROM ai_lessons WHERE module_id = ? ORDER BY sort_order, id
+            ", [$module['id']]);
+        }
+        $course['modules'] = $modules;
+
+        // Count total lessons
+        $course['total_lessons'] = (int) \Core\Database::scalar("
+            SELECT COUNT(*) FROM ai_lessons l JOIN ai_modules m ON l.module_id = m.id WHERE m.course_id = ?
+        ", [$course['id']]);
+
+        // Check enrollment
+        $enrollment = \Core\Database::queryOne("
+            SELECT * FROM ai_enrollments WHERE user_id = ? AND course_id = ?
+        ", [$userId, $course['id']]);
+        $course['is_enrolled'] = !empty($enrollment);
+        $course['enrollment'] = $enrollment;
+
+        View::render('ai-courses/show', [
+            'title' => $course['title'] ?? 'AI Course',
+            'course' => $course
+        ]);
+    });
+
+    $router->post('/ai-courses/{id}/enroll', function ($id) {
+        global $auth;
+
+        if (!verify_csrf($_POST['_token'] ?? '')) {
+            flash('error', 'Invalid request');
+            redirect('/ai-courses/' . $id);
+        }
+
+        $userId = $auth->user()['id'] ?? 0;
+        $user = $auth->user();
+
+        // Check if AI course exists
+        $course = \Core\Database::queryOne("SELECT id, is_premium, title FROM ai_courses WHERE id = ? AND is_published = 1", [$id]);
+        if (!$course) {
+            flash('error', 'Course not found');
+            redirect('/courses');
+        }
+
+        // Check if already enrolled
+        $existing = \Core\Database::queryOne("SELECT id FROM ai_enrollments WHERE user_id = ? AND course_id = ?", [$userId, $course['id']]);
+        if ($existing) {
+            flash('info', 'You are already enrolled in this course');
+            redirect('/ai-courses/' . $id);
+        }
+
+        // Check subscription for premium AI courses
+        if (!empty($course['is_premium'])) {
+            $isAdmin = ($user['role'] ?? '') === 'admin';
+
+            if (!$isAdmin) {
+                $activeSubscription = \Core\Database::queryOne("
+                    SELECT s.id FROM subscriptions s
+                    WHERE s.user_id = ? AND s.status = 'active'
+                    AND (s.end_date IS NULL OR s.end_date >= CURDATE())
+                    LIMIT 1
+                ", [$userId]);
+
+                if (!$activeSubscription) {
+                    flash('error', 'This is a premium AI course. Please subscribe to access this course.');
+                    redirect('/subscription');
+                }
+            }
+        }
+
+        // Create enrollment
+        \Core\Database::execute("
+            INSERT INTO ai_enrollments (user_id, course_id, enrolled_at)
+            VALUES (?, ?, NOW())
+        ", [$userId, $course['id']]);
+
+        flash('success', 'Successfully enrolled in AI course!');
+        redirect('/ai-courses/' . $id . '/learn');
+    });
+
+    $router->get('/ai-courses/{id}/learn', function ($id) {
+        global $auth;
+        $userId = $auth->user()['id'] ?? 0;
+
+        // Get AI course
+        $course = \Core\Database::queryOne("SELECT * FROM ai_courses WHERE id = ? AND is_published = 1", [$id]);
+        if (!$course) {
+            View::error(404, 'Course not found');
+        }
+
+        // Check enrollment
+        $enrollment = \Core\Database::queryOne("
+            SELECT * FROM ai_enrollments WHERE user_id = ? AND course_id = ?
+        ", [$userId, $course['id']]);
+
+        if (!$enrollment) {
+            flash('error', 'Please enroll in this course first');
+            redirect('/ai-courses/' . $id);
+        }
+
+        // Get modules with lessons
+        $modules = \Core\Database::query("
+            SELECT * FROM ai_modules WHERE course_id = ? ORDER BY sort_order, id
+        ", [$course['id']]);
+
+        foreach ($modules as &$module) {
+            $module['lessons'] = \Core\Database::query("
+                SELECT * FROM ai_lessons WHERE module_id = ? ORDER BY sort_order, id
+            ", [$module['id']]);
+        }
+        $course['modules'] = $modules;
+
+        View::render('ai-courses/learn', [
+            'title' => 'Learn: ' . $course['title'],
+            'course' => $course,
+            'enrollment' => $enrollment
+        ]);
     });
 
     $router->get('/courses/{courseId}/lessons/{lessonId}', function ($courseId, $lessonId) {
@@ -2572,12 +2884,14 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
         // Determine if published based on status field
         $isPublished = ($_POST['status'] ?? 'draft') === 'published' ? 1 : 0;
         $categoryId = !empty($_POST['category_id']) ? (int)$_POST['category_id'] : null;
+        $isPremium = isset($_POST['is_premium']) ? 1 : 0;
 
         try {
             $pdo = \Core\Database::getConnection();
             $stmt = $pdo->prepare("
-                INSERT INTO ai_courses (title, slug, description, category_id, level, is_published, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, NOW())
+                INSERT INTO ai_courses (title, slug, description, category_id, level, is_published, is_premium,
+                                        learning_objectives, estimated_duration, ai_instructions, prerequisites, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
             ");
             $stmt->execute([
                 $title,
@@ -2585,12 +2899,23 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
                 $_POST['description'] ?? '',
                 $categoryId,
                 $_POST['level'] ?? 'beginner',
-                $isPublished
+                $isPublished,
+                $isPremium,
+                $_POST['learning_objectives'] ?? '',
+                $_POST['estimated_duration'] ?? '',
+                $_POST['ai_instructions'] ?? '',
+                $_POST['prerequisites'] ?? ''
             ]);
 
             $courseId = $pdo->lastInsertId();
 
             if ($courseId) {
+                // Parse curriculum text if provided
+                $curriculumText = trim($_POST['curriculum_text'] ?? '');
+                if (!empty($curriculumText)) {
+                    parseCurriculumText($courseId, $curriculumText);
+                }
+
                 flash('success', 'AI Course created successfully');
                 redirect('/admin/ai-courses/' . $courseId . '/curriculum');
             } else {
@@ -2605,6 +2930,57 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
             redirect('/admin/ai-courses/create');
         }
     });
+
+    // Helper function to parse curriculum text into modules and lessons
+    function parseCurriculumText($courseId, $text) {
+        $lines = explode("\n", $text);
+        $currentModuleId = null;
+        $moduleOrder = 0;
+        $lessonOrder = 0;
+
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if (empty($line)) continue;
+
+            // Check if this is a module line (starts with "Module" or is a header without "-")
+            if (preg_match('/^(?:Module\s*\d*[:.]?\s*)?(.+)$/i', $line, $matches) && strpos($line, '-') !== 0) {
+                // It's a module if it starts with "Module" or doesn't start with "-"
+                if (stripos($line, 'Module') === 0 || (strpos($line, '-') !== 0 && !$currentModuleId)) {
+                    $moduleTitle = preg_replace('/^Module\s*\d*[:.]?\s*/i', '', $line);
+                    $moduleTitle = trim($moduleTitle);
+
+                    if (!empty($moduleTitle)) {
+                        $moduleOrder++;
+                        $lessonOrder = 0;
+
+                        \Core\Database::execute("
+                            INSERT INTO ai_modules (course_id, title, sort_order, created_at)
+                            VALUES (?, ?, ?, NOW())
+                        ", [$courseId, $moduleTitle, $moduleOrder]);
+
+                        $currentModuleId = \Core\Database::getConnection()->lastInsertId();
+                    }
+                    continue;
+                }
+            }
+
+            // Check if this is a lesson line (starts with "-" or "Lesson")
+            if ($currentModuleId && (strpos($line, '-') === 0 || stripos($line, 'Lesson') === 0)) {
+                $lessonTitle = preg_replace('/^[-*]\s*/', '', $line);
+                $lessonTitle = preg_replace('/^Lesson\s*\d*[:.]?\s*/i', '', $lessonTitle);
+                $lessonTitle = trim($lessonTitle);
+
+                if (!empty($lessonTitle)) {
+                    $lessonOrder++;
+
+                    \Core\Database::execute("
+                        INSERT INTO ai_lessons (module_id, title, sort_order, created_at)
+                        VALUES (?, ?, ?, NOW())
+                    ", [$currentModuleId, $lessonTitle, $lessonOrder]);
+                }
+            }
+        }
+    }
 
     $router->get('/ai-courses/{id}/edit', function ($id) {
         $course = \Core\Database::queryOne("SELECT * FROM ai_courses WHERE id = ?", [$id]);

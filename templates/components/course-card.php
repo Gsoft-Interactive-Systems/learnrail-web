@@ -8,6 +8,7 @@ $compact = $compact ?? false;
 $thumbnail = $course['thumbnail'] ?? '/images/course-placeholder.jpg';
 $instructor = $course['instructor_name'] ?? $course['instructor']['name'] ?? 'Unknown';
 $rating = number_format($course['rating'] ?? 0, 1);
+$isAICourse = !empty($course['is_ai_course']);
 
 // Duration is stored as hours in duration_hours
 $durationHours = (float)($course['duration_hours'] ?? 0);
@@ -20,13 +21,18 @@ if ($durationHours >= 1) {
 } elseif ($durationHours > 0) {
     $durationText = round($durationHours * 60) . 'm';
 } else {
-    $durationText = '0m';
+    $durationText = '';
 }
+
+// Link to different route for AI courses
+$courseUrl = $isAICourse ? '/ai-courses/' . e($course['id']) : '/courses/' . e($course['id'] ?? $course['slug'] ?? '');
 ?>
-<a href="/courses/<?= e($course['id'] ?? $course['slug'] ?? '') ?>" class="course-card <?= $compact ? 'compact' : '' ?>" style="<?= $compact ? 'width: 280px;' : '' ?>">
+<a href="<?= $courseUrl ?>" class="course-card <?= $compact ? 'compact' : '' ?>" style="<?= $compact ? 'width: 280px;' : '' ?>">
     <div class="course-card-thumbnail">
         <img src="<?= e($thumbnail) ?>" alt="<?= e($course['title'] ?? 'Course') ?>" loading="lazy">
-        <?php if (!empty($course['is_featured'])): ?>
+        <?php if ($isAICourse): ?>
+            <span class="course-card-badge ai-badge"><i class="iconoir-brain"></i> AI-Powered</span>
+        <?php elseif (!empty($course['is_featured'])): ?>
             <span class="course-card-badge">Featured</span>
         <?php elseif (!empty($course['is_free'])): ?>
             <span class="course-card-badge" style="background: var(--secondary);">Free</span>
@@ -36,14 +42,18 @@ if ($durationHours >= 1) {
         <h3 class="course-card-title"><?= e($course['title'] ?? 'Untitled Course') ?></h3>
         <p class="course-card-instructor">By <?= e($instructor) ?></p>
         <div class="course-card-meta">
+            <?php if (!$isAICourse): ?>
             <span>
                 <i class="iconoir-star"></i>
                 <?= $rating ?>
             </span>
+            <?php endif; ?>
+            <?php if ($durationText): ?>
             <span>
                 <i class="iconoir-clock"></i>
                 <?= $durationText ?>
             </span>
+            <?php endif; ?>
             <span>
                 <i class="iconoir-book"></i>
                 <?= e($course['total_lessons'] ?? 0) ?> lessons
