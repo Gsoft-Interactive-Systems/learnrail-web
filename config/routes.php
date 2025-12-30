@@ -3071,7 +3071,7 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
             redirect('/admin/ai-courses/' . $id . '/edit');
         }
 
-        $course = \Core\Database::queryOne("SELECT id FROM ai_courses WHERE id = ?", [$id]);
+        $course = \Core\Database::queryOne("SELECT * FROM ai_courses WHERE id = ?", [$id]);
         if (!$course) {
             flash('error', 'Course not found');
             redirect('/admin/ai-courses');
@@ -3080,10 +3080,43 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
         // Determine published status from 'status' field
         $isPublished = ($_POST['status'] ?? 'draft') === 'published' ? 1 : 0;
 
+        // Handle thumbnail upload
+        $thumbnailPath = $course['thumbnail']; // Keep existing if no new upload
+        if (!empty($_FILES['thumbnail']['name']) && $_FILES['thumbnail']['error'] === UPLOAD_ERR_OK) {
+            $publicDir = realpath(__DIR__ . '/../public');
+            $uploadDir = $publicDir . DIRECTORY_SEPARATOR . 'uploads' . DIRECTORY_SEPARATOR . 'ai-courses' . DIRECTORY_SEPARATOR;
+
+            if (!is_dir($uploadDir)) {
+                @mkdir($uploadDir, 0755, true);
+            }
+
+            $ext = strtolower(pathinfo($_FILES['thumbnail']['name'], PATHINFO_EXTENSION));
+            $allowedExts = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+
+            if (in_array($ext, $allowedExts)) {
+                // Generate slug for filename
+                $slug = strtolower(trim(preg_replace('/[^A-Za-z0-9-]+/', '-', $_POST['title'] ?? 'course')));
+                $filename = $slug . '-' . time() . '.' . $ext;
+                $targetPath = $uploadDir . $filename;
+
+                if (move_uploaded_file($_FILES['thumbnail']['tmp_name'], $targetPath)) {
+                    // Delete old thumbnail if exists
+                    if (!empty($course['thumbnail'])) {
+                        $oldPath = $publicDir . str_replace('/', DIRECTORY_SEPARATOR, $course['thumbnail']);
+                        if (file_exists($oldPath)) {
+                            @unlink($oldPath);
+                        }
+                    }
+                    $thumbnailPath = '/uploads/ai-courses/' . $filename;
+                }
+            }
+        }
+
         \Core\Database::execute("
             UPDATE ai_courses SET
                 title = ?,
                 description = ?,
+                thumbnail = ?,
                 category_id = ?,
                 level = ?,
                 is_published = ?
@@ -3091,6 +3124,7 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
         ", [
             $_POST['title'] ?? '',
             $_POST['description'] ?? '',
+            $thumbnailPath,
             !empty($_POST['category_id']) ? (int)$_POST['category_id'] : null,
             $_POST['level'] ?? 'beginner',
             $isPublished,
