@@ -374,13 +374,14 @@ $router->group(['middleware' => 'auth'], function ($router) {
         global $auth;
         $userId = $auth->user()['id'] ?? 0;
 
-        // Get lesson with module info
+        // Get lesson with module info and progress status
         $lesson = \Core\Database::queryOne("
-            SELECT l.*, m.title as module_title, m.course_id
+            SELECT l.*, m.title as module_title, m.course_id,
+                   (SELECT status FROM lesson_progress WHERE user_id = ? AND lesson_id = l.id) as progress_status
             FROM lessons l
             JOIN modules m ON l.module_id = m.id
             WHERE l.id = ?
-        ", [$lessonId]);
+        ", [$userId, $lessonId]);
 
         if (!$lesson) {
             View::error(404, 'Lesson not found');
@@ -394,19 +395,30 @@ $router->group(['middleware' => 'auth'], function ($router) {
             WHERE c.id = ?
         ", [$lesson['course_id']]);
 
-        // Get all lessons for navigation
+        // Get all lessons for navigation with progress status
         $allLessons = \Core\Database::query("
-            SELECT l.id, l.title, l.sort_order, m.sort_order as module_order
+            SELECT l.id, l.title, l.type, l.sort_order, m.sort_order as module_order,
+                   (SELECT status FROM lesson_progress WHERE user_id = ? AND lesson_id = l.id) as progress_status
             FROM lessons l
             JOIN modules m ON l.module_id = m.id
-            WHERE m.course_id = ?
+            WHERE m.course_id = ? AND l.is_published = 1
             ORDER BY m.sort_order, l.sort_order
-        ", [$lesson['course_id']]);
+        ", [$userId, $lesson['course_id']]);
 
         // Find prev/next lessons
         $currentIndex = array_search($lessonId, array_column($allLessons, 'id'));
-        $lesson['prev_lesson'] = $currentIndex > 0 ? $allLessons[$currentIndex - 1] : null;
-        $lesson['next_lesson'] = $currentIndex < count($allLessons) - 1 ? $allLessons[$currentIndex + 1] : null;
+        $prevLesson = $currentIndex > 0 ? $allLessons[$currentIndex - 1] : null;
+        $nextLesson = $currentIndex < count($allLessons) - 1 ? $allLessons[$currentIndex + 1] : null;
+
+        // Calculate course progress
+        $totalLessons = count($allLessons);
+        $completedLessons = 0;
+        foreach ($allLessons as $l) {
+            if ($l['progress_status'] === 'completed') {
+                $completedLessons++;
+            }
+        }
+        $courseProgress = $totalLessons > 0 ? round(($completedLessons / $totalLessons) * 100) : 0;
 
         // Update/create lesson progress
         $progress = \Core\Database::queryOne("SELECT id FROM lesson_progress WHERE user_id = ? AND lesson_id = ?", [$userId, $lessonId]);
@@ -421,7 +433,11 @@ $router->group(['middleware' => 'auth'], function ($router) {
             'title' => $lesson['title'] ?? 'Lesson',
             'lesson' => $lesson,
             'course' => $course ?? [],
-            'courseId' => $courseId
+            'courseId' => $courseId,
+            'allLessons' => $allLessons,
+            'prevLesson' => $prevLesson,
+            'nextLesson' => $nextLesson,
+            'courseProgress' => $courseProgress
         ]);
     });
 
@@ -475,6 +491,9 @@ $router->group(['middleware' => 'auth'], function ($router) {
 
             // Award points for lesson completion
             \Core\Database::execute("UPDATE users SET total_points = total_points + 10 WHERE id = ?", [$userId]);
+
+            View::json(['success' => true, 'message' => 'Lesson marked as complete', 'progress' => (int)$progress]);
+            return;
         }
 
         View::json(['success' => true, 'message' => 'Lesson marked as complete']);
@@ -1758,6 +1777,384 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
             flash('error', 'Failed to update course: ' . $e->getMessage());
             redirect('/admin/courses/' . $id . '/edit');
         }
+    });
+
+    // =============================================
+    // LESSON MANAGEMENT
+    // =============================================
+
+    // List lessons for a course
+    $router->get('/courses/{id}/lessons', function ($id) {
+        $course = \Core\Database::queryOne("SELECT * FROM courses WHERE id = ?", [$id]);
+        if (!$course) {
+            View::error(404, 'Course not found');
+        }
+
+        // Get modules with their lessons
+        $modules = \Core\Database::query("SELECT * FROM modules WHERE course_id = ? ORDER BY sort_order, id", [$id]);
+        foreach ($modules as &$module) {
+            $module['lessons'] = \Core\Database::query(
+                "SELECT * FROM lessons WHERE module_id = ? ORDER BY sort_order, id",
+                [$module['id']]
+            );
+        }
+
+        View::render('admin/courses/lessons', [
+            'title' => 'Manage Lessons - ' . $course['title'],
+            'course' => $course,
+            'modules' => $modules
+        ], 'admin');
+    });
+
+    // Create lesson form
+    $router->get('/courses/{id}/lessons/create', function ($id) {
+        $course = \Core\Database::queryOne("SELECT * FROM courses WHERE id = ?", [$id]);
+        if (!$course) {
+            View::error(404, 'Course not found');
+        }
+
+        $modules = \Core\Database::query("SELECT * FROM modules WHERE course_id = ? ORDER BY sort_order, id", [$id]);
+
+        View::render('admin/courses/lesson-form', [
+            'title' => 'Add Lesson - ' . $course['title'],
+            'course' => $course,
+            'modules' => $modules,
+            'lesson' => null
+        ], 'admin');
+    });
+
+    // Create lesson
+    $router->post('/courses/{id}/lessons/create', function ($id) {
+        if (!verify_csrf($_POST['_token'] ?? '')) {
+            flash('error', 'Invalid request');
+            redirect("/admin/courses/{$id}/lessons/create");
+        }
+
+        $course = \Core\Database::queryOne("SELECT id FROM courses WHERE id = ?", [$id]);
+        if (!$course) {
+            flash('error', 'Course not found');
+            redirect('/admin/courses');
+        }
+
+        $moduleId = (int)($_POST['module_id'] ?? 0);
+        if (!$moduleId) {
+            flash('error', 'Please select a module');
+            redirect("/admin/courses/{$id}/lessons/create");
+        }
+
+        $title = trim($_POST['title'] ?? '');
+        if (empty($title)) {
+            flash('error', 'Lesson title is required');
+            redirect("/admin/courses/{$id}/lessons/create");
+        }
+
+        $type = $_POST['type'] ?? 'video';
+        $videoUrl = null;
+        $videoDuration = 0;
+        $content = null;
+
+        if ($type === 'video') {
+            // Build Bunny embed URL if library and video IDs provided
+            $bunnyLibraryId = trim($_POST['bunny_library_id'] ?? '');
+            $bunnyVideoId = trim($_POST['bunny_video_id'] ?? '');
+
+            if ($bunnyLibraryId && $bunnyVideoId) {
+                $videoUrl = "https://iframe.mediadelivery.net/embed/{$bunnyLibraryId}/{$bunnyVideoId}?autoplay=false&preload=true";
+            } else {
+                $videoUrl = trim($_POST['video_url'] ?? '');
+            }
+            $videoDuration = (int)($_POST['video_duration'] ?? 0);
+        } else {
+            $content = $_POST['content'] ?? '';
+        }
+
+        try {
+            \Core\Database::execute("
+                INSERT INTO lessons (module_id, title, description, type, video_url, video_duration, content, is_free_preview, is_published, sort_order, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+            ", [
+                $moduleId,
+                $title,
+                $_POST['description'] ?? '',
+                $type,
+                $videoUrl,
+                $videoDuration,
+                $content,
+                isset($_POST['is_free_preview']) ? 1 : 0,
+                (int)($_POST['is_published'] ?? 1),
+                (int)($_POST['sort_order'] ?? 0)
+            ]);
+
+            // Update course total_lessons count
+            $totalLessons = \Core\Database::scalar("
+                SELECT COUNT(*) FROM lessons l
+                JOIN modules m ON l.module_id = m.id
+                WHERE m.course_id = ?
+            ", [$id]);
+            \Core\Database::execute("UPDATE courses SET total_lessons = ? WHERE id = ?", [$totalLessons, $id]);
+
+            flash('success', 'Lesson created successfully');
+            redirect("/admin/courses/{$id}/lessons");
+        } catch (\Exception $e) {
+            error_log("Lesson creation error: " . $e->getMessage());
+            flash('error', 'Failed to create lesson: ' . $e->getMessage());
+            redirect("/admin/courses/{$id}/lessons/create");
+        }
+    });
+
+    // Edit lesson form
+    $router->get('/courses/{id}/lessons/{lessonId}/edit', function ($id, $lessonId) {
+        $course = \Core\Database::queryOne("SELECT * FROM courses WHERE id = ?", [$id]);
+        if (!$course) {
+            View::error(404, 'Course not found');
+        }
+
+        $lesson = \Core\Database::queryOne("
+            SELECT l.* FROM lessons l
+            JOIN modules m ON l.module_id = m.id
+            WHERE l.id = ? AND m.course_id = ?
+        ", [$lessonId, $id]);
+        if (!$lesson) {
+            View::error(404, 'Lesson not found');
+        }
+
+        // Parse Bunny URL to extract library and video IDs
+        if (!empty($lesson['video_url']) && strpos($lesson['video_url'], 'mediadelivery.net') !== false) {
+            if (preg_match('/embed\/(\d+)\/([a-f0-9-]+)/', $lesson['video_url'], $matches)) {
+                $lesson['bunny_library_id'] = $matches[1];
+                $lesson['bunny_video_id'] = $matches[2];
+            }
+        }
+
+        $modules = \Core\Database::query("SELECT * FROM modules WHERE course_id = ? ORDER BY sort_order, id", [$id]);
+
+        View::render('admin/courses/lesson-form', [
+            'title' => 'Edit Lesson - ' . $lesson['title'],
+            'course' => $course,
+            'modules' => $modules,
+            'lesson' => $lesson
+        ], 'admin');
+    });
+
+    // Update lesson
+    $router->post('/courses/{id}/lessons/{lessonId}/edit', function ($id, $lessonId) {
+        if (!verify_csrf($_POST['_token'] ?? '')) {
+            flash('error', 'Invalid request');
+            redirect("/admin/courses/{$id}/lessons/{$lessonId}/edit");
+        }
+
+        $lesson = \Core\Database::queryOne("
+            SELECT l.id FROM lessons l
+            JOIN modules m ON l.module_id = m.id
+            WHERE l.id = ? AND m.course_id = ?
+        ", [$lessonId, $id]);
+        if (!$lesson) {
+            flash('error', 'Lesson not found');
+            redirect("/admin/courses/{$id}/lessons");
+        }
+
+        $moduleId = (int)($_POST['module_id'] ?? 0);
+        $title = trim($_POST['title'] ?? '');
+        $type = $_POST['type'] ?? 'video';
+        $videoUrl = null;
+        $videoDuration = 0;
+        $content = null;
+
+        if ($type === 'video') {
+            $bunnyLibraryId = trim($_POST['bunny_library_id'] ?? '');
+            $bunnyVideoId = trim($_POST['bunny_video_id'] ?? '');
+
+            if ($bunnyLibraryId && $bunnyVideoId) {
+                $videoUrl = "https://iframe.mediadelivery.net/embed/{$bunnyLibraryId}/{$bunnyVideoId}?autoplay=false&preload=true";
+            } else {
+                $videoUrl = trim($_POST['video_url'] ?? '');
+            }
+            $videoDuration = (int)($_POST['video_duration'] ?? 0);
+        } else {
+            $content = $_POST['content'] ?? '';
+        }
+
+        try {
+            \Core\Database::execute("
+                UPDATE lessons SET
+                    module_id = ?,
+                    title = ?,
+                    description = ?,
+                    type = ?,
+                    video_url = ?,
+                    video_duration = ?,
+                    content = ?,
+                    is_free_preview = ?,
+                    is_published = ?,
+                    sort_order = ?,
+                    updated_at = NOW()
+                WHERE id = ?
+            ", [
+                $moduleId,
+                $title,
+                $_POST['description'] ?? '',
+                $type,
+                $videoUrl,
+                $videoDuration,
+                $content,
+                isset($_POST['is_free_preview']) ? 1 : 0,
+                (int)($_POST['is_published'] ?? 1),
+                (int)($_POST['sort_order'] ?? 0),
+                $lessonId
+            ]);
+
+            flash('success', 'Lesson updated successfully');
+            redirect("/admin/courses/{$id}/lessons");
+        } catch (\Exception $e) {
+            error_log("Lesson update error: " . $e->getMessage());
+            flash('error', 'Failed to update lesson');
+            redirect("/admin/courses/{$id}/lessons/{$lessonId}/edit");
+        }
+    });
+
+    // Delete lesson
+    $router->post('/courses/{id}/lessons/{lessonId}/delete', function ($id, $lessonId) {
+        header('Content-Type: application/json');
+
+        try {
+            $lesson = \Core\Database::queryOne("
+                SELECT l.id FROM lessons l
+                JOIN modules m ON l.module_id = m.id
+                WHERE l.id = ? AND m.course_id = ?
+            ", [$lessonId, $id]);
+
+            if (!$lesson) {
+                echo json_encode(['success' => false, 'message' => 'Lesson not found']);
+                exit;
+            }
+
+            // Delete lesson progress first
+            \Core\Database::execute("DELETE FROM lesson_progress WHERE lesson_id = ?", [$lessonId]);
+            \Core\Database::execute("DELETE FROM lessons WHERE id = ?", [$lessonId]);
+
+            // Update course total_lessons count
+            $totalLessons = \Core\Database::scalar("
+                SELECT COUNT(*) FROM lessons l
+                JOIN modules m ON l.module_id = m.id
+                WHERE m.course_id = ?
+            ", [$id]);
+            \Core\Database::execute("UPDATE courses SET total_lessons = ? WHERE id = ?", [$totalLessons, $id]);
+
+            echo json_encode(['success' => true]);
+        } catch (\Exception $e) {
+            echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+        }
+        exit;
+    });
+
+    // =============================================
+    // MODULE MANAGEMENT
+    // =============================================
+
+    // Create module
+    $router->post('/courses/{id}/modules', function ($id) {
+        if (!verify_csrf($_POST['_token'] ?? '')) {
+            flash('error', 'Invalid request');
+            redirect("/admin/courses/{$id}/lessons");
+        }
+
+        $course = \Core\Database::queryOne("SELECT id FROM courses WHERE id = ?", [$id]);
+        if (!$course) {
+            flash('error', 'Course not found');
+            redirect('/admin/courses');
+        }
+
+        $title = trim($_POST['title'] ?? '');
+        if (empty($title)) {
+            flash('error', 'Module title is required');
+            redirect("/admin/courses/{$id}/lessons");
+        }
+
+        // Get next sort order
+        $maxOrder = \Core\Database::scalar("SELECT MAX(sort_order) FROM modules WHERE course_id = ?", [$id]) ?? 0;
+
+        try {
+            \Core\Database::execute("
+                INSERT INTO modules (course_id, title, description, sort_order, created_at)
+                VALUES (?, ?, ?, ?, NOW())
+            ", [
+                $id,
+                $title,
+                $_POST['description'] ?? '',
+                $maxOrder + 1
+            ]);
+
+            flash('success', 'Module created successfully');
+        } catch (\Exception $e) {
+            error_log("Module creation error: " . $e->getMessage());
+            flash('error', 'Failed to create module');
+        }
+
+        redirect("/admin/courses/{$id}/lessons");
+    });
+
+    // Update module
+    $router->post('/courses/{id}/modules/{moduleId}', function ($id, $moduleId) {
+        if (!verify_csrf($_POST['_token'] ?? '')) {
+            flash('error', 'Invalid request');
+            redirect("/admin/courses/{$id}/lessons");
+        }
+
+        $module = \Core\Database::queryOne("SELECT id FROM modules WHERE id = ? AND course_id = ?", [$moduleId, $id]);
+        if (!$module) {
+            flash('error', 'Module not found');
+            redirect("/admin/courses/{$id}/lessons");
+        }
+
+        try {
+            \Core\Database::execute("
+                UPDATE modules SET title = ?, description = ? WHERE id = ?
+            ", [
+                $_POST['title'] ?? '',
+                $_POST['description'] ?? '',
+                $moduleId
+            ]);
+
+            flash('success', 'Module updated successfully');
+        } catch (\Exception $e) {
+            flash('error', 'Failed to update module');
+        }
+
+        redirect("/admin/courses/{$id}/lessons");
+    });
+
+    // Delete module
+    $router->post('/courses/{id}/modules/{moduleId}/delete', function ($id, $moduleId) {
+        header('Content-Type: application/json');
+
+        try {
+            $module = \Core\Database::queryOne("SELECT id FROM modules WHERE id = ? AND course_id = ?", [$moduleId, $id]);
+            if (!$module) {
+                echo json_encode(['success' => false, 'message' => 'Module not found']);
+                exit;
+            }
+
+            // Delete all lessons in this module (and their progress)
+            $lessonIds = \Core\Database::query("SELECT id FROM lessons WHERE module_id = ?", [$moduleId]);
+            foreach ($lessonIds as $lesson) {
+                \Core\Database::execute("DELETE FROM lesson_progress WHERE lesson_id = ?", [$lesson['id']]);
+            }
+            \Core\Database::execute("DELETE FROM lessons WHERE module_id = ?", [$moduleId]);
+            \Core\Database::execute("DELETE FROM modules WHERE id = ?", [$moduleId]);
+
+            // Update course total_lessons count
+            $totalLessons = \Core\Database::scalar("
+                SELECT COUNT(*) FROM lessons l
+                JOIN modules m ON l.module_id = m.id
+                WHERE m.course_id = ?
+            ", [$id]);
+            \Core\Database::execute("UPDATE courses SET total_lessons = ? WHERE id = ?", [$totalLessons, $id]);
+
+            echo json_encode(['success' => true]);
+        } catch (\Exception $e) {
+            echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+        }
+        exit;
     });
 
     // Delete course (POST-based for JS compatibility)
