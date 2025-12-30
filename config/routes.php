@@ -209,10 +209,11 @@ $router->group(['middleware' => 'auth'], function ($router) {
         $total = (int) \Core\Database::scalar("SELECT COUNT(*) FROM courses c WHERE {$where}", $params);
 
         $courses = \Core\Database::query("
-            SELECT c.*, cat.name as category_name,
+            SELECT c.*, cat.name as category_name, i.name as instructor_name,
                    (SELECT COUNT(*) FROM lessons l JOIN modules m ON l.module_id = m.id WHERE m.course_id = c.id) as lesson_count
             FROM courses c
             LEFT JOIN categories cat ON c.category_id = cat.id
+            LEFT JOIN instructors i ON c.instructor_id = i.id
             WHERE {$where}
             ORDER BY c.is_featured DESC, c.created_at DESC
             LIMIT {$perPage} OFFSET {$offset}
@@ -261,6 +262,16 @@ $router->group(['middleware' => 'auth'], function ($router) {
             $course['requirements'] = json_decode($course['requirements'], true) ?: [];
         }
 
+        // Format instructor as array for template
+        $course['instructor'] = [];
+        if (!empty($course['instructor_name'])) {
+            $course['instructor'] = [
+                'name' => $course['instructor_name'],
+                'bio' => $course['instructor_bio'] ?? '',
+                'avatar' => $course['instructor_avatar'] ?? ''
+            ];
+        }
+
         // Get modules with lessons
         $modules = \Core\Database::query("
             SELECT * FROM modules WHERE course_id = ? ORDER BY sort_order
@@ -299,9 +310,10 @@ $router->group(['middleware' => 'auth'], function ($router) {
         }
 
         $userId = $auth->user()['id'] ?? 0;
+        $user = $auth->user();
 
         // Check if course exists
-        $course = \Core\Database::queryOne("SELECT id FROM courses WHERE id = ? OR slug = ?", [$id, $id]);
+        $course = \Core\Database::queryOne("SELECT id, is_free, title FROM courses WHERE id = ? OR slug = ?", [$id, $id]);
         if (!$course) {
             flash('error', 'Course not found');
             redirect('/courses');
@@ -312,6 +324,40 @@ $router->group(['middleware' => 'auth'], function ($router) {
         if ($existing) {
             flash('info', 'You are already enrolled in this course');
             redirect('/courses/' . $id);
+        }
+
+        // Check subscription for premium courses (not free courses)
+        if (empty($course['is_free'])) {
+            // Check if user is admin (admins can enroll in any course)
+            $isAdmin = ($user['role'] ?? '') === 'admin';
+
+            if (!$isAdmin) {
+                // Check for active subscription
+                $activeSubscription = \Core\Database::queryOne("
+                    SELECT s.id, s.plan_id, sp.name as plan_name, sp.accessible_courses
+                    FROM subscriptions s
+                    JOIN subscription_plans sp ON s.plan_id = sp.id
+                    WHERE s.user_id = ?
+                    AND s.status = 'active'
+                    AND (s.end_date IS NULL OR s.end_date >= CURDATE())
+                    ORDER BY s.end_date DESC
+                    LIMIT 1
+                ", [$userId]);
+
+                if (!$activeSubscription) {
+                    flash('error', 'This is a premium course. Please subscribe to access this course.');
+                    redirect('/subscription');
+                }
+
+                // Check if this specific course is accessible with the subscription plan
+                if (!empty($activeSubscription['accessible_courses'])) {
+                    $accessibleCourses = json_decode($activeSubscription['accessible_courses'], true);
+                    if (is_array($accessibleCourses) && !in_array($course['id'], $accessibleCourses)) {
+                        flash('error', 'Your current subscription plan does not include access to this course. Please upgrade your plan.');
+                        redirect('/subscription');
+                    }
+                }
+            }
         }
 
         // Create enrollment
@@ -1458,6 +1504,59 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
         // is_free is the inverse of is_premium (premium = NOT free)
         $isFree = isset($_POST['is_premium']) ? 0 : 1;
 
+        // Handle thumbnail upload
+        $thumbnailPath = null;
+        if (!empty($_FILES['thumbnail']['name']) && $_FILES['thumbnail']['error'] === UPLOAD_ERR_OK) {
+            $uploadDir = __DIR__ . '/../public/uploads/courses/';
+            if (!is_dir($uploadDir)) {
+                mkdir($uploadDir, 0755, true);
+            }
+
+            $ext = strtolower(pathinfo($_FILES['thumbnail']['name'], PATHINFO_EXTENSION));
+            $allowedExts = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+
+            if (in_array($ext, $allowedExts)) {
+                $filename = $slug . '-' . time() . '.' . $ext;
+                $targetPath = $uploadDir . $filename;
+
+                if (move_uploaded_file($_FILES['thumbnail']['tmp_name'], $targetPath)) {
+                    $thumbnailPath = '/uploads/courses/' . $filename;
+                }
+            }
+        }
+
+        // Handle instructor - create one if name provided
+        $instructorId = null;
+        $instructorName = trim($_POST['instructor'] ?? '');
+        if (!empty($instructorName)) {
+            // Check if instructor with this name exists
+            $existingInstructor = \Core\Database::queryOne(
+                "SELECT id FROM instructors WHERE name = ?",
+                [$instructorName]
+            );
+
+            if ($existingInstructor) {
+                $instructorId = $existingInstructor['id'];
+            } else {
+                // Create new instructor
+                \Core\Database::execute(
+                    "INSERT INTO instructors (name, created_at) VALUES (?, NOW())",
+                    [$instructorName]
+                );
+                $instructorId = \Core\Database::lastInsertId();
+            }
+        }
+
+        // Parse duration - convert text like "10 hours" or "2.5 hours" to decimal
+        $durationHours = 0;
+        $durationText = trim($_POST['duration'] ?? '');
+        if (!empty($durationText)) {
+            // Extract numeric value (handles "10 hours", "10h", "10", etc.)
+            if (preg_match('/(\d+(?:\.\d+)?)/', $durationText, $matches)) {
+                $durationHours = (float)$matches[1];
+            }
+        }
+
         // Process learning outcomes
         $learningOutcomes = [];
         if (!empty($_POST['learning_outcomes'])) {
@@ -1472,8 +1571,8 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
 
         try {
             \Core\Database::execute("
-                INSERT INTO courses (title, slug, description, category_id, level, is_published, is_free, what_you_learn, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                INSERT INTO courses (title, slug, description, category_id, level, is_published, is_free, what_you_learn, thumbnail, instructor_id, duration_hours, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
             ", [
                 $title,
                 $slug,
@@ -1482,7 +1581,10 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
                 $_POST['level'] ?? 'beginner',
                 $isPublished,
                 $isFree,
-                $whatYouLearn
+                $whatYouLearn,
+                $thumbnailPath,
+                $instructorId,
+                $durationHours
             ]);
 
             flash('success', 'Course created successfully');
@@ -1497,15 +1599,23 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
 
     $router->get('/courses/{id}/edit', function ($id) {
         $course = \Core\Database::queryOne("
-            SELECT c.*, cat.name as category_name
+            SELECT c.*, cat.name as category_name, i.name as instructor_name
             FROM courses c
             LEFT JOIN categories cat ON c.category_id = cat.id
+            LEFT JOIN instructors i ON c.instructor_id = i.id
             WHERE c.id = ?
         ", [$id]);
 
         if (!$course) {
             View::error(404, 'Course not found');
         }
+
+        // Map instructor name to 'instructor' field for form
+        $course['instructor'] = $course['instructor_name'] ?? '';
+
+        // Format duration for display
+        $hours = (float)($course['duration_hours'] ?? 0);
+        $course['duration'] = $hours > 0 ? $hours . ' hours' : '';
 
         // Get lessons for this course
         $course['lessons'] = \Core\Database::query("
@@ -1528,7 +1638,7 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
             redirect('/admin/courses/' . $id . '/edit');
         }
 
-        $course = \Core\Database::queryOne("SELECT id FROM courses WHERE id = ?", [$id]);
+        $course = \Core\Database::queryOne("SELECT id, slug, thumbnail FROM courses WHERE id = ?", [$id]);
         if (!$course) {
             flash('error', 'Course not found');
             redirect('/admin/courses');
@@ -1538,6 +1648,63 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
         $isPublished = ($_POST['status'] ?? 'draft') === 'published' ? 1 : 0;
         // is_free is the inverse of is_premium (premium = NOT free)
         $isFree = isset($_POST['is_premium']) ? 0 : 1;
+
+        // Handle thumbnail upload
+        $thumbnailPath = $course['thumbnail']; // Keep existing if no new upload
+        if (!empty($_FILES['thumbnail']['name']) && $_FILES['thumbnail']['error'] === UPLOAD_ERR_OK) {
+            $uploadDir = __DIR__ . '/../public/uploads/courses/';
+            if (!is_dir($uploadDir)) {
+                mkdir($uploadDir, 0755, true);
+            }
+
+            $ext = strtolower(pathinfo($_FILES['thumbnail']['name'], PATHINFO_EXTENSION));
+            $allowedExts = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+
+            if (in_array($ext, $allowedExts)) {
+                $filename = $course['slug'] . '-' . time() . '.' . $ext;
+                $targetPath = $uploadDir . $filename;
+
+                if (move_uploaded_file($_FILES['thumbnail']['tmp_name'], $targetPath)) {
+                    // Delete old thumbnail if exists
+                    if (!empty($course['thumbnail'])) {
+                        $oldPath = __DIR__ . '/../public' . $course['thumbnail'];
+                        if (file_exists($oldPath)) {
+                            unlink($oldPath);
+                        }
+                    }
+                    $thumbnailPath = '/uploads/courses/' . $filename;
+                }
+            }
+        }
+
+        // Handle instructor - create one if name provided
+        $instructorId = null;
+        $instructorName = trim($_POST['instructor'] ?? '');
+        if (!empty($instructorName)) {
+            $existingInstructor = \Core\Database::queryOne(
+                "SELECT id FROM instructors WHERE name = ?",
+                [$instructorName]
+            );
+
+            if ($existingInstructor) {
+                $instructorId = $existingInstructor['id'];
+            } else {
+                \Core\Database::execute(
+                    "INSERT INTO instructors (name, created_at) VALUES (?, NOW())",
+                    [$instructorName]
+                );
+                $instructorId = \Core\Database::lastInsertId();
+            }
+        }
+
+        // Parse duration
+        $durationHours = 0;
+        $durationText = trim($_POST['duration'] ?? '');
+        if (!empty($durationText)) {
+            if (preg_match('/(\d+(?:\.\d+)?)/', $durationText, $matches)) {
+                $durationHours = (float)$matches[1];
+            }
+        }
 
         // Process learning outcomes
         $learningOutcomes = [];
@@ -1561,6 +1728,9 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
                     is_published = ?,
                     is_free = ?,
                     what_you_learn = ?,
+                    thumbnail = ?,
+                    instructor_id = ?,
+                    duration_hours = ?,
                     updated_at = NOW()
                 WHERE id = ?
             ", [
@@ -1571,6 +1741,9 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
                 $isPublished,
                 $isFree,
                 $whatYouLearn,
+                $thumbnailPath,
+                $instructorId,
+                $durationHours,
                 $id
             ]);
 

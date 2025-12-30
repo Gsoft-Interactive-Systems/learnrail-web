@@ -8,11 +8,19 @@ $compact = $compact ?? false;
 $thumbnail = $course['thumbnail'] ?? '/images/course-placeholder.jpg';
 $instructor = $course['instructor_name'] ?? $course['instructor']['name'] ?? 'Unknown';
 $rating = number_format($course['rating'] ?? 0, 1);
-$duration = $course['duration_hours'] ?? $course['duration_minutes'] ?? 0;
-if ($duration > 60) {
-    $durationText = floor($duration / 60) . 'h';
+
+// Duration is stored as hours in duration_hours
+$durationHours = (float)($course['duration_hours'] ?? 0);
+if ($durationHours >= 1) {
+    $durationText = floor($durationHours) . 'h';
+    $remainingMins = round(($durationHours - floor($durationHours)) * 60);
+    if ($remainingMins > 0) {
+        $durationText .= ' ' . $remainingMins . 'm';
+    }
+} elseif ($durationHours > 0) {
+    $durationText = round($durationHours * 60) . 'm';
 } else {
-    $durationText = $duration . 'm';
+    $durationText = '0m';
 }
 ?>
 <a href="/courses/<?= e($course['id'] ?? $course['slug'] ?? '') ?>" class="course-card <?= $compact ? 'compact' : '' ?>" style="<?= $compact ? 'width: 280px;' : '' ?>">
