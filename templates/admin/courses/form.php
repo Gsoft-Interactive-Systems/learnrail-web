@@ -93,22 +93,54 @@ $title = $isEdit ? 'Edit Course' : 'Create Course';
                 <div class="card-header">
                     <h3 class="card-title">What Students Will Learn</h3>
                 </div>
-                <div class="card-body" x-data="{ items: <?= json_encode($course['learning_outcomes'] ?? ['']) ?> }">
-                    <template x-for="(item, index) in items" :key="index">
-                        <div class="d-flex gap-3 mb-3">
-                            <input type="text" :name="'learning_outcomes[' + index + ']'" class="form-input"
-                                   x-model="items[index]" placeholder="Learning outcome...">
-                            <button type="button" class="btn btn-ghost text-danger" @click="items.splice(index, 1)" x-show="items.length > 1">
+                <div class="card-body" id="outcomes-container">
+                    <div id="outcomes-list">
+                        <?php
+                        $outcomes = [];
+                        if (!empty($course['what_you_learn'])) {
+                            $outcomes = is_string($course['what_you_learn']) ? json_decode($course['what_you_learn'], true) : $course['what_you_learn'];
+                        }
+                        if (empty($outcomes)) $outcomes = [''];
+                        foreach ($outcomes as $index => $outcome):
+                        ?>
+                        <div class="outcome-item d-flex gap-3 mb-3">
+                            <input type="text" name="learning_outcomes[]" class="form-input"
+                                   value="<?= e($outcome) ?>" placeholder="e.g., Build real-world applications">
+                            <button type="button" class="btn btn-ghost text-danger remove-outcome" onclick="removeOutcome(this)">
                                 <i class="iconoir-trash"></i>
                             </button>
                         </div>
-                    </template>
-                    <button type="button" class="btn btn-ghost btn-sm" @click="items.push('')">
+                        <?php endforeach; ?>
+                    </div>
+                    <button type="button" class="btn btn-ghost btn-sm" onclick="addOutcome()">
                         <i class="iconoir-plus"></i>
                         Add Outcome
                     </button>
+                    <p class="text-sm text-secondary mt-2">List specific skills or knowledge students will gain from this course</p>
                 </div>
             </div>
+
+            <script>
+            function addOutcome() {
+                const list = document.getElementById('outcomes-list');
+                const div = document.createElement('div');
+                div.className = 'outcome-item d-flex gap-3 mb-3';
+                div.innerHTML = `
+                    <input type="text" name="learning_outcomes[]" class="form-input" placeholder="e.g., Build real-world applications">
+                    <button type="button" class="btn btn-ghost text-danger remove-outcome" onclick="removeOutcome(this)">
+                        <i class="iconoir-trash"></i>
+                    </button>
+                `;
+                list.appendChild(div);
+            }
+
+            function removeOutcome(btn) {
+                const items = document.querySelectorAll('.outcome-item');
+                if (items.length > 1) {
+                    btn.closest('.outcome-item').remove();
+                }
+            }
+            </script>
         </div>
 
         <!-- Sidebar -->

@@ -253,6 +253,14 @@ $router->group(['middleware' => 'auth'], function ($router) {
             View::error(404, 'Course not found');
         }
 
+        // Decode JSON fields
+        if (!empty($course['what_you_learn'])) {
+            $course['what_you_learn'] = json_decode($course['what_you_learn'], true) ?: [];
+        }
+        if (!empty($course['requirements'])) {
+            $course['requirements'] = json_decode($course['requirements'], true) ?: [];
+        }
+
         // Get modules with lessons
         $modules = \Core\Database::query("
             SELECT * FROM modules WHERE course_id = ? ORDER BY sort_order
@@ -1450,10 +1458,22 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
         // is_free is the inverse of is_premium (premium = NOT free)
         $isFree = isset($_POST['is_premium']) ? 0 : 1;
 
+        // Process learning outcomes
+        $learningOutcomes = [];
+        if (!empty($_POST['learning_outcomes'])) {
+            foreach ($_POST['learning_outcomes'] as $outcome) {
+                $outcome = trim($outcome);
+                if (!empty($outcome)) {
+                    $learningOutcomes[] = $outcome;
+                }
+            }
+        }
+        $whatYouLearn = !empty($learningOutcomes) ? json_encode($learningOutcomes) : null;
+
         try {
             \Core\Database::execute("
-                INSERT INTO courses (title, slug, description, category_id, level, is_published, is_free, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
+                INSERT INTO courses (title, slug, description, category_id, level, is_published, is_free, what_you_learn, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
             ", [
                 $title,
                 $slug,
@@ -1461,7 +1481,8 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
                 !empty($_POST['category_id']) ? (int)$_POST['category_id'] : null,
                 $_POST['level'] ?? 'beginner',
                 $isPublished,
-                $isFree
+                $isFree,
+                $whatYouLearn
             ]);
 
             flash('success', 'Course created successfully');
@@ -1518,6 +1539,18 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
         // is_free is the inverse of is_premium (premium = NOT free)
         $isFree = isset($_POST['is_premium']) ? 0 : 1;
 
+        // Process learning outcomes
+        $learningOutcomes = [];
+        if (!empty($_POST['learning_outcomes'])) {
+            foreach ($_POST['learning_outcomes'] as $outcome) {
+                $outcome = trim($outcome);
+                if (!empty($outcome)) {
+                    $learningOutcomes[] = $outcome;
+                }
+            }
+        }
+        $whatYouLearn = !empty($learningOutcomes) ? json_encode($learningOutcomes) : null;
+
         try {
             $rowsAffected = \Core\Database::execute("
                 UPDATE courses SET
@@ -1527,6 +1560,7 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
                     level = ?,
                     is_published = ?,
                     is_free = ?,
+                    what_you_learn = ?,
                     updated_at = NOW()
                 WHERE id = ?
             ", [
@@ -1536,6 +1570,7 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
                 $_POST['level'] ?? 'beginner',
                 $isPublished,
                 $isFree,
+                $whatYouLearn,
                 $id
             ]);
 
