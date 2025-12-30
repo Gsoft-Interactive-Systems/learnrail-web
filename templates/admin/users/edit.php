@@ -60,6 +60,43 @@
                         </div>
                     </div>
 
+                    <!-- Subscription Management -->
+                    <div class="subscription-section mb-4">
+                        <label class="form-label">
+                            <i class="iconoir-credit-card"></i>
+                            Subscription Plan
+                        </label>
+                        <select name="subscription_plan" class="form-select">
+                            <option value="free" <?= empty($user['current_plan_id']) ? 'selected' : '' ?>>Free (No Subscription)</option>
+                            <?php foreach ($plans ?? [] as $plan): ?>
+                                <option value="<?= e($plan['id']) ?>" <?= ($user['current_plan_id'] ?? '') == $plan['id'] ? 'selected' : '' ?>>
+                                    <?= e($plan['name']) ?> - <?= $plan['currency'] === 'NGN' ? 'N' : $plan['currency'] ?><?= number_format($plan['price']) ?>
+                                    <?php if ($plan['duration_months'] == 1): ?>/month
+                                    <?php elseif ($plan['duration_months'] == 3): ?>/3 months
+                                    <?php elseif ($plan['duration_months'] == 6): ?>/6 months
+                                    <?php elseif ($plan['duration_months'] == 12): ?>/year
+                                    <?php else: ?>/<?= $plan['duration_months'] ?> months
+                                    <?php endif; ?>
+                                    <?php if ($plan['includes_goal_tracker'] && $plan['includes_accountability_partner']): ?>
+                                        (Goals + Partner)
+                                    <?php elseif ($plan['includes_goal_tracker']): ?>
+                                        (Goals)
+                                    <?php endif; ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                        <?php if (!empty($user['subscription_end_date'])): ?>
+                            <p class="text-sm text-secondary mt-2">
+                                <i class="iconoir-calendar"></i>
+                                Current subscription expires: <?= format_date($user['subscription_end_date']) ?>
+                            </p>
+                        <?php endif; ?>
+                        <p class="text-sm text-secondary mt-1">
+                            <i class="iconoir-info-circle"></i>
+                            Changing the plan will update the subscription immediately with a new period starting today.
+                        </p>
+                    </div>
+
                     <div class="d-flex gap-3 mt-6">
                         <button type="submit" class="btn btn-primary">
                             <i class="iconoir-check"></i>
@@ -197,6 +234,37 @@
 
 .form-group {
     margin-bottom: 0;
+}
+
+/* Subscription section styling */
+.subscription-section {
+    padding: 20px;
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.05) 0%, rgba(79, 70, 229, 0.08) 100%);
+    border-radius: 12px;
+    border: 1px solid rgba(99, 102, 241, 0.15);
+}
+
+.subscription-section .form-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--primary);
+    font-weight: 600;
+}
+
+.subscription-section .form-label i {
+    font-size: 18px;
+}
+
+.subscription-section .text-sm {
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.subscription-section .text-sm i {
+    font-size: 14px;
 }
 
 /* Responsive grid adjustments */

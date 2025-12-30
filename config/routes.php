@@ -1165,6 +1165,8 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
                    (SELECT COUNT(*) FROM enrollments WHERE user_id = u.id) as enrollment_count,
                    (SELECT COUNT(*) FROM enrollments WHERE user_id = u.id AND status = 'completed') as courses_completed,
                    (SELECT s.id FROM subscriptions s WHERE s.user_id = u.id AND s.status = 'active' LIMIT 1) as active_subscription_id,
+                   (SELECT s.plan_id FROM subscriptions s WHERE s.user_id = u.id AND s.status = 'active' LIMIT 1) as current_plan_id,
+                   (SELECT s.end_date FROM subscriptions s WHERE s.user_id = u.id AND s.status = 'active' LIMIT 1) as subscription_end_date,
                    (SELECT sp.name FROM subscriptions s JOIN subscription_plans sp ON s.plan_id = sp.id WHERE s.user_id = u.id AND s.status = 'active' LIMIT 1) as subscription_plan
             FROM users u
             WHERE u.id = ?
@@ -1196,6 +1198,7 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
             redirect('/admin/users');
         }
 
+        // Update user info
         \Core\Database::execute("
             UPDATE users SET
                 first_name = ?,
@@ -1215,6 +1218,67 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
             $_POST['status'] ?? 'active',
             $id
         ]);
+
+        // Handle subscription change
+        $newPlanId = $_POST['subscription_plan'] ?? '';
+        $currentSubscription = \Core\Database::queryOne(
+            "SELECT id, plan_id FROM subscriptions WHERE user_id = ? AND status = 'active' LIMIT 1",
+            [$id]
+        );
+
+        if ($newPlanId === '' || $newPlanId === 'free') {
+            // Remove active subscription (set to cancelled)
+            if ($currentSubscription) {
+                \Core\Database::execute(
+                    "UPDATE subscriptions SET status = 'cancelled', updated_at = NOW() WHERE id = ?",
+                    [$currentSubscription['id']]
+                );
+            }
+        } else {
+            // Get the plan details
+            $plan = \Core\Database::queryOne("SELECT * FROM subscription_plans WHERE id = ?", [$newPlanId]);
+            if ($plan) {
+                $durationDays = ($plan['duration_days'] ?? 0) ?: ($plan['duration_months'] * 30);
+                $startDate = date('Y-m-d');
+                $endDate = date('Y-m-d', strtotime("+{$durationDays} days"));
+
+                if ($currentSubscription) {
+                    // Update existing subscription
+                    \Core\Database::execute("
+                        UPDATE subscriptions SET
+                            plan_id = ?,
+                            status = 'active',
+                            amount_paid = ?,
+                            start_date = ?,
+                            end_date = ?,
+                            payment_method = 'bank_transfer',
+                            payment_reference = ?,
+                            updated_at = NOW()
+                        WHERE id = ?
+                    ", [
+                        $newPlanId,
+                        $plan['price'],
+                        $startDate,
+                        $endDate,
+                        'ADMIN-' . strtoupper(uniqid()),
+                        $currentSubscription['id']
+                    ]);
+                } else {
+                    // Create new subscription
+                    \Core\Database::execute("
+                        INSERT INTO subscriptions (user_id, plan_id, status, amount_paid, start_date, end_date, payment_method, payment_reference, created_at)
+                        VALUES (?, ?, 'active', ?, ?, ?, 'bank_transfer', ?, NOW())
+                    ", [
+                        $id,
+                        $newPlanId,
+                        $plan['price'],
+                        $startDate,
+                        $endDate,
+                        'ADMIN-' . strtoupper(uniqid())
+                    ]);
+                }
+            }
+        }
 
         flash('success', 'User updated successfully');
         redirect('/admin/users');
