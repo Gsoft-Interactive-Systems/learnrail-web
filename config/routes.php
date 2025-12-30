@@ -2910,9 +2910,8 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
         try {
             $pdo = \Core\Database::getConnection();
             $stmt = $pdo->prepare("
-                INSERT INTO ai_courses (title, slug, description, thumbnail, category_id, level, is_published, is_premium,
-                                        learning_objectives, estimated_duration, ai_instructions, prerequisites, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                INSERT INTO ai_courses (title, slug, description, thumbnail, category_id, level, is_published, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
             ");
             $stmt->execute([
                 $title,
@@ -2921,12 +2920,7 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
                 $thumbnailPath,
                 $categoryId,
                 $_POST['level'] ?? 'beginner',
-                $isPublished,
-                $isPremium,
-                $_POST['learning_objectives'] ?? '',
-                $_POST['estimated_duration'] ?? '',
-                $_POST['ai_instructions'] ?? '',
-                $_POST['prerequisites'] ?? ''
+                $isPublished
             ]);
 
             $courseId = $pdo->lastInsertId();
