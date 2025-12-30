@@ -745,6 +745,15 @@ $router->group(['middleware' => 'auth'], function ($router) {
 
         // Check if user is subscribed with goal tracker access
         if (!$auth->isSubscribed()) {
+            // Fetch plans from database
+            $plans = \Core\Database::query("
+                SELECT id, name, slug, description, duration_months, price, currency,
+                       is_popular, includes_goal_tracker, includes_accountability_partner
+                FROM subscription_plans
+                WHERE is_active = 1
+                ORDER BY sort_order, price
+            ");
+
             View::render('goals/upgrade', [
                 'title' => 'Goal Tracker - Premium Feature',
                 'feature' => 'Goal Tracker',
@@ -755,7 +764,8 @@ $router->group(['middleware' => 'auth'], function ($router) {
                     'Track progress with visual dashboards',
                     'Get reminders to stay on track',
                     'Celebrate achievements with badges'
-                ]
+                ],
+                'plans' => $plans
             ]);
             return;
         }
@@ -891,6 +901,15 @@ $router->group(['middleware' => 'auth'], function ($router) {
 
         // Check if user is subscribed with accountability partner access
         if (!$auth->isSubscribed()) {
+            // Fetch plans from database
+            $plans = \Core\Database::query("
+                SELECT id, name, slug, description, duration_months, price, currency,
+                       is_popular, includes_goal_tracker, includes_accountability_partner
+                FROM subscription_plans
+                WHERE is_active = 1
+                ORDER BY sort_order, price
+            ");
+
             View::render('goals/upgrade', [
                 'title' => 'Accountability Partner - Premium Feature',
                 'feature' => 'Accountability Partner',
@@ -901,7 +920,8 @@ $router->group(['middleware' => 'auth'], function ($router) {
                     'Share your goals and progress',
                     'Receive encouragement and support',
                     'Stay accountable to your commitments'
-                ]
+                ],
+                'plans' => $plans
             ]);
             return;
         }

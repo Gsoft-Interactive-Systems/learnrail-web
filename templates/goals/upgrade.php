@@ -28,23 +28,35 @@
             <p class="upgrade-note">Unlock all premium features and accelerate your learning journey</p>
         </div>
 
+        <?php if (!empty($plans)): ?>
         <div class="upgrade-plans-preview">
             <h4>Choose a plan that works for you:</h4>
             <div class="mini-plans">
-                <div class="mini-plan">
-                    <span class="plan-name">Quarterly</span>
-                    <span class="plan-price">Goal Tracker</span>
-                </div>
-                <div class="mini-plan featured">
-                    <span class="plan-name">Biannual</span>
-                    <span class="plan-price">Goals + Partner</span>
-                </div>
-                <div class="mini-plan">
-                    <span class="plan-name">Annual</span>
-                    <span class="plan-price">Everything + AI</span>
-                </div>
+                <?php foreach ($plans as $plan): ?>
+                <a href="/subscription" class="mini-plan <?= $plan['is_popular'] ? 'featured' : '' ?>">
+                    <span class="plan-name"><?= e($plan['name']) ?></span>
+                    <span class="plan-price">
+                        <?= $plan['currency'] === 'NGN' ? 'N' : $plan['currency'] ?><?= number_format($plan['price']) ?>
+                        <?php if ($plan['duration_months'] == 1): ?>/month
+                        <?php elseif ($plan['duration_months'] == 3): ?>/3 months
+                        <?php elseif ($plan['duration_months'] == 6): ?>/6 months
+                        <?php elseif ($plan['duration_months'] == 12): ?>/year
+                        <?php else: ?>/<?= $plan['duration_months'] ?> months
+                        <?php endif; ?>
+                    </span>
+                    <span class="plan-features">
+                        <?php if ($plan['includes_goal_tracker']): ?>
+                            <i class="iconoir-check" title="Goal Tracker"></i>
+                        <?php endif; ?>
+                        <?php if ($plan['includes_accountability_partner']): ?>
+                            <i class="iconoir-users" title="Accountability Partner"></i>
+                        <?php endif; ?>
+                    </span>
+                </a>
+                <?php endforeach; ?>
             </div>
         </div>
+        <?php endif; ?>
     </div>
 </div>
 
@@ -169,7 +181,17 @@
     border-radius: 8px;
     padding: 12px 16px;
     flex: 1;
-    max-width: 140px;
+    max-width: 180px;
+    text-decoration: none;
+    color: inherit;
+    transition: transform 0.2s, box-shadow 0.2s;
+    display: block;
+    text-align: center;
+}
+
+.mini-plan:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
 }
 
 .mini-plan.featured {
@@ -179,15 +201,28 @@
 
 .mini-plan .plan-name {
     display: block;
-    font-size: 12px;
+    font-size: 14px;
     font-weight: 600;
     margin-bottom: 4px;
 }
 
 .mini-plan .plan-price {
     display: block;
-    font-size: 11px;
+    font-size: 12px;
     opacity: 0.8;
+    margin-bottom: 4px;
+}
+
+.mini-plan .plan-features {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 6px;
+}
+
+.mini-plan .plan-features i {
+    font-size: 14px;
+    opacity: 0.9;
 }
 
 @media (max-width: 600px) {
