@@ -17,16 +17,20 @@
                 <i class="iconoir-book"></i>
                 <span>Courses</span>
             </a>
-            <?php if ($isSubscribed ?? false): ?>
             <a href="/goals" class="nav-item <?= str_starts_with($_SERVER['REQUEST_URI'], '/goals') ? 'active' : '' ?>">
                 <i class="iconoir-target"></i>
                 <span>Goals</span>
+                <?php if (!($isSubscribed ?? false)): ?>
+                    <i class="iconoir-lock" style="margin-left: auto; font-size: 14px; opacity: 0.6;"></i>
+                <?php endif; ?>
             </a>
             <a href="/accountability" class="nav-item <?= str_starts_with($_SERVER['REQUEST_URI'], '/accountability') ? 'active' : '' ?>">
                 <i class="iconoir-chat-bubble"></i>
                 <span>Partner</span>
+                <?php if (!($isSubscribed ?? false)): ?>
+                    <i class="iconoir-lock" style="margin-left: auto; font-size: 14px; opacity: 0.6;"></i>
+                <?php endif; ?>
             </a>
-            <?php endif; ?>
         </div>
 
         <div class="nav-section">

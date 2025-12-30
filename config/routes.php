@@ -7,6 +7,41 @@
 use Core\View;
 
 // ===========================================
+// PUBLIC API ROUTES (For landing page and external access)
+// ===========================================
+
+$router->get('/api/plans', function () {
+    // Enable CORS for the landing page
+    header('Access-Control-Allow-Origin: *');
+    header('Access-Control-Allow-Methods: GET');
+    header('Content-Type: application/json');
+
+    $plans = \Core\Database::query("
+        SELECT id, name, slug, description, duration_months, duration_days, price, original_price,
+               currency, features, is_popular, includes_goal_tracker, includes_accountability_partner
+        FROM subscription_plans
+        WHERE is_active = 1
+        ORDER BY sort_order, price
+    ");
+
+    // Decode features JSON for each plan
+    foreach ($plans as &$plan) {
+        $plan['features'] = json_decode($plan['features'] ?? '[]', true) ?: [];
+        $plan['price'] = (float) $plan['price'];
+        $plan['original_price'] = $plan['original_price'] ? (float) $plan['original_price'] : null;
+        $plan['is_popular'] = (bool) $plan['is_popular'];
+        $plan['includes_goal_tracker'] = (bool) $plan['includes_goal_tracker'];
+        $plan['includes_accountability_partner'] = (bool) $plan['includes_accountability_partner'];
+    }
+
+    echo json_encode([
+        'success' => true,
+        'data' => $plans
+    ]);
+    exit;
+});
+
+// ===========================================
 // PUBLIC ROUTES (No authentication required)
 // ===========================================
 
@@ -698,14 +733,32 @@ $router->group(['middleware' => 'auth'], function ($router) {
 });
 
 // ===========================================
-// SUBSCRIBER-ONLY ROUTES
+// PREMIUM FEATURES (Goals & Accountability)
+// These routes show an upgrade prompt to non-subscribers
 // ===========================================
 
-$router->group(['middleware' => 'subscribed'], function ($router) {
-    // Goals
+$router->group(['middleware' => 'auth'], function ($router) {
+    // Goals - Show upgrade prompt for non-subscribers
     $router->get('/goals', function () {
         global $auth;
         $userId = $auth->user()['id'] ?? 0;
+
+        // Check if user is subscribed with goal tracker access
+        if (!$auth->isSubscribed()) {
+            View::render('goals/upgrade', [
+                'title' => 'Goal Tracker - Premium Feature',
+                'feature' => 'Goal Tracker',
+                'description' => 'Set meaningful goals, track your progress with milestones, and stay motivated with regular check-ins.',
+                'benefits' => [
+                    'Create unlimited learning goals',
+                    'Break goals into actionable milestones',
+                    'Track progress with visual dashboards',
+                    'Get reminders to stay on track',
+                    'Celebrate achievements with badges'
+                ]
+            ]);
+            return;
+        }
 
         $goals = \Core\Database::query("
             SELECT g.*,
@@ -723,6 +776,11 @@ $router->group(['middleware' => 'subscribed'], function ($router) {
     });
 
     $router->get('/goals/create', function () {
+        global $auth;
+        if (!$auth->isSubscribed()) {
+            redirect('/goals');
+        }
+
         View::render('goals/create', [
             'title' => 'Create Goal'
         ]);
@@ -730,6 +788,11 @@ $router->group(['middleware' => 'subscribed'], function ($router) {
 
     $router->post('/goals/create', function () {
         global $auth;
+
+        if (!$auth->isSubscribed()) {
+            flash('error', 'Please subscribe to access this feature');
+            redirect('/subscription');
+        }
 
         if (!verify_csrf($_POST['_token'] ?? '')) {
             flash('error', 'Invalid request');
@@ -756,6 +819,10 @@ $router->group(['middleware' => 'subscribed'], function ($router) {
     $router->get('/goals/{id}', function ($id) {
         global $auth;
         $userId = $auth->user()['id'] ?? 0;
+
+        if (!$auth->isSubscribed()) {
+            redirect('/goals');
+        }
 
         $goal = \Core\Database::queryOne("
             SELECT * FROM goals WHERE id = ? AND user_id = ?
@@ -785,6 +852,10 @@ $router->group(['middleware' => 'subscribed'], function ($router) {
         global $auth;
         $userId = $auth->user()['id'] ?? 0;
 
+        if (!$auth->isSubscribed()) {
+            View::json(['success' => false, 'message' => 'Subscription required']);
+        }
+
         // Verify goal belongs to user
         $goal = \Core\Database::queryOne("SELECT id FROM goals WHERE id = ? AND user_id = ?", [$id, $userId]);
         if (!$goal) {
@@ -813,10 +884,27 @@ $router->group(['middleware' => 'subscribed'], function ($router) {
         View::json(['success' => true, 'message' => 'Check-in recorded']);
     });
 
-    // Accountability
+    // Accountability - Show upgrade prompt for non-subscribers
     $router->get('/accountability', function () {
         global $auth;
         $userId = $auth->user()['id'] ?? 0;
+
+        // Check if user is subscribed with accountability partner access
+        if (!$auth->isSubscribed()) {
+            View::render('goals/upgrade', [
+                'title' => 'Accountability Partner - Premium Feature',
+                'feature' => 'Accountability Partner',
+                'description' => 'Stay motivated with a dedicated accountability partner who checks in on your progress and keeps you on track.',
+                'benefits' => [
+                    'Get matched with a dedicated partner',
+                    'Direct messaging with your partner',
+                    'Share your goals and progress',
+                    'Receive encouragement and support',
+                    'Stay accountable to your commitments'
+                ]
+            ]);
+            return;
+        }
 
         // Get accountability partner
         $assignment = \Core\Database::queryOne("
@@ -856,6 +944,10 @@ $router->group(['middleware' => 'subscribed'], function ($router) {
     $router->get('/accountability/chat', function () {
         global $auth;
         $userId = $auth->user()['id'] ?? 0;
+
+        if (!$auth->isSubscribed()) {
+            redirect('/accountability');
+        }
 
         // Get accountability partner
         $assignment = \Core\Database::queryOne("
@@ -901,6 +993,10 @@ $router->group(['middleware' => 'subscribed'], function ($router) {
     $router->post('/accountability/messages', function () {
         global $auth;
         $userId = $auth->user()['id'] ?? 0;
+
+        if (!$auth->isSubscribed()) {
+            View::json(['success' => false, 'message' => 'Subscription required']);
+        }
 
         $data = json_decode(file_get_contents('php://input'), true);
         $message = $data['message'] ?? '';
@@ -1026,6 +1122,84 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
         ], 'admin');
     });
 
+    $router->get('/users/{id}', function ($id) {
+        $user = \Core\Database::queryOne("
+            SELECT u.*,
+                   (SELECT COUNT(*) FROM enrollments WHERE user_id = u.id) as enrollment_count,
+                   (SELECT COUNT(*) FROM enrollments WHERE user_id = u.id AND status = 'completed') as courses_completed,
+                   (SELECT sp.name FROM subscriptions s JOIN subscription_plans sp ON s.plan_id = sp.id WHERE s.user_id = u.id AND s.status = 'active' LIMIT 1) as subscription_plan
+            FROM users u
+            WHERE u.id = ?
+        ", [$id]);
+
+        if (!$user) {
+            View::json(['success' => false, 'message' => 'User not found'], 404);
+        }
+
+        View::json(['success' => true, 'data' => $user]);
+    });
+
+    $router->get('/users/{id}/edit', function ($id) {
+        $user = \Core\Database::queryOne("
+            SELECT u.*,
+                   (SELECT COUNT(*) FROM enrollments WHERE user_id = u.id) as enrollment_count,
+                   (SELECT COUNT(*) FROM enrollments WHERE user_id = u.id AND status = 'completed') as courses_completed,
+                   (SELECT s.id FROM subscriptions s WHERE s.user_id = u.id AND s.status = 'active' LIMIT 1) as active_subscription_id,
+                   (SELECT sp.name FROM subscriptions s JOIN subscription_plans sp ON s.plan_id = sp.id WHERE s.user_id = u.id AND s.status = 'active' LIMIT 1) as subscription_plan
+            FROM users u
+            WHERE u.id = ?
+        ", [$id]);
+
+        if (!$user) {
+            flash('error', 'User not found');
+            redirect('/admin/users');
+        }
+
+        $plans = \Core\Database::query("SELECT * FROM subscription_plans WHERE is_active = 1 ORDER BY sort_order, price");
+
+        View::render('admin/users/edit', [
+            'title' => 'Edit User',
+            'user' => $user,
+            'plans' => $plans
+        ], 'admin');
+    });
+
+    $router->post('/users/{id}/edit', function ($id) {
+        if (!verify_csrf($_POST['_token'] ?? '')) {
+            flash('error', 'Invalid request');
+            redirect('/admin/users/' . $id . '/edit');
+        }
+
+        $user = \Core\Database::queryOne("SELECT id FROM users WHERE id = ?", [$id]);
+        if (!$user) {
+            flash('error', 'User not found');
+            redirect('/admin/users');
+        }
+
+        \Core\Database::execute("
+            UPDATE users SET
+                first_name = ?,
+                last_name = ?,
+                email = ?,
+                phone = ?,
+                role = ?,
+                status = ?,
+                updated_at = NOW()
+            WHERE id = ?
+        ", [
+            $_POST['first_name'] ?? '',
+            $_POST['last_name'] ?? '',
+            $_POST['email'] ?? '',
+            $_POST['phone'] ?? '',
+            $_POST['role'] ?? 'user',
+            $_POST['status'] ?? 'active',
+            $id
+        ]);
+
+        flash('success', 'User updated successfully');
+        redirect('/admin/users');
+    });
+
     $router->post('/users/{id}/role', function ($id) {
         $data = json_decode(file_get_contents('php://input'), true);
         $role = $data['role'] ?? 'user';
@@ -1038,6 +1212,60 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
         \Core\Database::execute("UPDATE users SET role = ?, updated_at = NOW() WHERE id = ?", [$role, $id]);
 
         View::json(['success' => true, 'message' => 'Role updated successfully']);
+    });
+
+    $router->post('/users/{id}/delete', function ($id) {
+        global $auth;
+        $currentUser = $auth->user();
+
+        // Prevent self-deletion
+        if ($currentUser['id'] == $id) {
+            View::json(['success' => false, 'message' => 'Cannot delete your own account']);
+        }
+
+        $user = \Core\Database::queryOne("SELECT id, role FROM users WHERE id = ?", [$id]);
+        if (!$user) {
+            View::json(['success' => false, 'message' => 'User not found']);
+        }
+
+        // Prevent deleting other admins (optional safety)
+        if ($user['role'] === 'admin') {
+            View::json(['success' => false, 'message' => 'Cannot delete admin users']);
+        }
+
+        \Core\Database::execute("DELETE FROM users WHERE id = ?", [$id]);
+
+        View::json(['success' => true, 'message' => 'User deleted successfully']);
+    });
+
+    $router->post('/users', function () {
+        $data = json_decode(file_get_contents('php://input'), true);
+
+        // Validate required fields
+        if (empty($data['first_name']) || empty($data['last_name']) || empty($data['email']) || empty($data['password'])) {
+            View::json(['success' => false, 'message' => 'All fields are required']);
+        }
+
+        // Check if email exists
+        $existing = \Core\Database::queryOne("SELECT id FROM users WHERE email = ?", [$data['email']]);
+        if ($existing) {
+            View::json(['success' => false, 'message' => 'Email already exists']);
+        }
+
+        $hashedPassword = password_hash($data['password'], PASSWORD_DEFAULT);
+
+        \Core\Database::execute("
+            INSERT INTO users (first_name, last_name, email, password, role, status, created_at)
+            VALUES (?, ?, ?, ?, ?, 'active', NOW())
+        ", [
+            $data['first_name'],
+            $data['last_name'],
+            $data['email'],
+            $hashedPassword,
+            $data['role'] ?? 'user'
+        ]);
+
+        View::json(['success' => true, 'message' => 'User created successfully']);
     });
 
     // Courses
