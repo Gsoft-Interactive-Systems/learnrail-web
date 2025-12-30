@@ -2799,6 +2799,81 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
         View::json(['success' => true, 'message' => 'Payment method updated']);
     });
 
+    // Helper function to parse curriculum text into modules and lessons
+    // Must be defined BEFORE routes that use it
+    function parseCurriculumText($courseId, $text) {
+        if (empty($text)) {
+            error_log("parseCurriculumText: Empty text provided for course {$courseId}");
+            return false;
+        }
+
+        $lines = explode("\n", $text);
+        $currentModuleId = null;
+        $moduleOrder = 0;
+        $lessonOrder = 0;
+        $modulesCreated = 0;
+        $lessonsCreated = 0;
+
+        error_log("parseCurriculumText: Processing " . count($lines) . " lines for course {$courseId}");
+
+        foreach ($lines as $lineNum => $line) {
+            $line = trim($line);
+            if (empty($line)) continue;
+
+            // Check if this is a module line (starts with "Module")
+            if (stripos($line, 'Module') === 0) {
+                // Extract module title - remove "Module X:" prefix
+                $moduleTitle = preg_replace('/^Module\s*\d*[:.]?\s*/i', '', $line);
+                $moduleTitle = trim($moduleTitle);
+
+                if (!empty($moduleTitle)) {
+                    $moduleOrder++;
+                    $lessonOrder = 0;
+
+                    try {
+                        \Core\Database::execute("
+                            INSERT INTO ai_modules (course_id, title, sort_order, created_at)
+                            VALUES (?, ?, ?, NOW())
+                        ", [$courseId, $moduleTitle, $moduleOrder]);
+
+                        $currentModuleId = \Core\Database::getConnection()->lastInsertId();
+                        $modulesCreated++;
+                        error_log("parseCurriculumText: Created module '{$moduleTitle}' with ID {$currentModuleId}");
+                    } catch (\Exception $e) {
+                        error_log("parseCurriculumText: Failed to create module '{$moduleTitle}': " . $e->getMessage());
+                    }
+                }
+                continue;
+            }
+
+            // Check if this is a lesson line (starts with "-" or "Lesson")
+            if ($currentModuleId && (strpos($line, '-') === 0 || stripos($line, 'Lesson') === 0)) {
+                // Extract lesson title - remove "- " or "Lesson X:" prefix
+                $lessonTitle = preg_replace('/^[-*]\s*/', '', $line);
+                $lessonTitle = preg_replace('/^Lesson\s*\d*[:.]?\s*/i', '', $lessonTitle);
+                $lessonTitle = trim($lessonTitle);
+
+                if (!empty($lessonTitle)) {
+                    $lessonOrder++;
+
+                    try {
+                        \Core\Database::execute("
+                            INSERT INTO ai_lessons (module_id, title, sort_order, created_at)
+                            VALUES (?, ?, ?, NOW())
+                        ", [$currentModuleId, $lessonTitle, $lessonOrder]);
+                        $lessonsCreated++;
+                        error_log("parseCurriculumText: Created lesson '{$lessonTitle}' for module {$currentModuleId}");
+                    } catch (\Exception $e) {
+                        error_log("parseCurriculumText: Failed to create lesson '{$lessonTitle}': " . $e->getMessage());
+                    }
+                }
+            }
+        }
+
+        error_log("parseCurriculumText: Completed - Created {$modulesCreated} modules and {$lessonsCreated} lessons");
+        return ['modules' => $modulesCreated, 'lessons' => $lessonsCreated];
+    }
+
     // AI Courses - Direct Database Access (no API)
     $router->get('/ai-courses', function () {
 
@@ -2928,11 +3003,19 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
             if ($courseId) {
                 // Parse curriculum text if provided
                 $curriculumText = trim($_POST['curriculum_text'] ?? '');
+                $curriculumResult = null;
                 if (!empty($curriculumText)) {
-                    parseCurriculumText($courseId, $curriculumText);
+                    error_log("Store route: Calling parseCurriculumText for course {$courseId}");
+                    error_log("Store route: Curriculum text length: " . strlen($curriculumText));
+                    $curriculumResult = parseCurriculumText($courseId, $curriculumText);
+                    error_log("Store route: parseCurriculumText returned: " . json_encode($curriculumResult));
                 }
 
-                flash('success', 'AI Course created successfully');
+                if ($curriculumResult && $curriculumResult['modules'] > 0) {
+                    flash('success', "AI Course created with {$curriculumResult['modules']} modules and {$curriculumResult['lessons']} lessons");
+                } else {
+                    flash('success', 'AI Course created successfully. Add modules and lessons manually.');
+                }
                 redirect('/admin/ai-courses/' . $courseId . '/curriculum');
             } else {
                 flash('error', 'Failed to create AI course - no ID returned');
@@ -2946,57 +3029,6 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
             redirect('/admin/ai-courses/create');
         }
     });
-
-    // Helper function to parse curriculum text into modules and lessons
-    function parseCurriculumText($courseId, $text) {
-        $lines = explode("\n", $text);
-        $currentModuleId = null;
-        $moduleOrder = 0;
-        $lessonOrder = 0;
-
-        foreach ($lines as $line) {
-            $line = trim($line);
-            if (empty($line)) continue;
-
-            // Check if this is a module line (starts with "Module" or is a header without "-")
-            if (preg_match('/^(?:Module\s*\d*[:.]?\s*)?(.+)$/i', $line, $matches) && strpos($line, '-') !== 0) {
-                // It's a module if it starts with "Module" or doesn't start with "-"
-                if (stripos($line, 'Module') === 0 || (strpos($line, '-') !== 0 && !$currentModuleId)) {
-                    $moduleTitle = preg_replace('/^Module\s*\d*[:.]?\s*/i', '', $line);
-                    $moduleTitle = trim($moduleTitle);
-
-                    if (!empty($moduleTitle)) {
-                        $moduleOrder++;
-                        $lessonOrder = 0;
-
-                        \Core\Database::execute("
-                            INSERT INTO ai_modules (course_id, title, sort_order, created_at)
-                            VALUES (?, ?, ?, NOW())
-                        ", [$courseId, $moduleTitle, $moduleOrder]);
-
-                        $currentModuleId = \Core\Database::getConnection()->lastInsertId();
-                    }
-                    continue;
-                }
-            }
-
-            // Check if this is a lesson line (starts with "-" or "Lesson")
-            if ($currentModuleId && (strpos($line, '-') === 0 || stripos($line, 'Lesson') === 0)) {
-                $lessonTitle = preg_replace('/^[-*]\s*/', '', $line);
-                $lessonTitle = preg_replace('/^Lesson\s*\d*[:.]?\s*/i', '', $lessonTitle);
-                $lessonTitle = trim($lessonTitle);
-
-                if (!empty($lessonTitle)) {
-                    $lessonOrder++;
-
-                    \Core\Database::execute("
-                        INSERT INTO ai_lessons (module_id, title, sort_order, created_at)
-                        VALUES (?, ?, ?, NOW())
-                    ", [$currentModuleId, $lessonTitle, $lessonOrder]);
-                }
-            }
-        }
-    }
 
     $router->get('/ai-courses/{id}/edit', function ($id) {
         $course = \Core\Database::queryOne("SELECT * FROM ai_courses WHERE id = ?", [$id]);

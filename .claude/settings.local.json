@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nrefactor: Replace all API calls with direct database queries\n\n- Convert all routes from using $api->get/post/put/delete to \\\\Core\\\\Database::query/execute\n- Dashboard: Direct DB queries for enrollments and featured courses\n- Courses: Full DB implementation for listing, details, enrollment, lessons\n- Profile: DB queries for user profile and update\n- Subscription: DB queries for plans, payment methods, payment initialization\n- Achievements/Badges: Join queries with user progress\n- Goals: Full CRUD with milestones and checkins\n- Accountability: Partner assignments and messaging\n- Notifications: DB queries with read status\n- Admin Dashboard: Stats aggregation from DB\n- Admin Users: Pagination and role management\n- Admin Payments: List with user info, approve with subscription activation\n- Admin Subscriptions: Full plans CRUD with features JSON\n- Admin Reports: User, revenue, and course statistics\n- Admin Settings: Key-value settings management\n\nThis removes dependency on external API and uses direct MySQL connections.\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git push:*)",
+      "Bash(git commit:*)",
+      "Bash(dir \"C:\\\\Users\\\\HP\\\\Documents\\\\JOBS\\\\learnrail-api\" /b)",
+      "Bash(dir:*)",
+      "Bash(if not exist \"c:\\\\Users\\\\HP\\\\Documents\\\\JOBS\\\\learnrail-web\\\\public\\\\uploads\" mkdir \"c:\\\\Users\\\\HP\\\\Documents\\\\JOBS\\\\learnrail-web\\\\public\\\\uploads\")",
+      "Bash(if not exist \"c:\\\\Users\\\\HP\\\\Documents\\\\JOBS\\\\learnrail-web\\\\public\\\\uploads\\\\courses\" mkdir \"c:\\\\Users\\\\HP\\\\Documents\\\\JOBS\\\\learnrail-web\\\\public\\\\uploads\\\\courses\")",
+      "Bash(if not exist \"c:\\\\Users\\\\HP\\\\Documents\\\\JOBS\\\\learnrail-web\\\\templates\\\\ai-courses\" mkdir \"c:\\\\Users\\\\HP\\\\Documents\\\\JOBS\\\\learnrail-web\\\\templates\\\\ai-courses\")"
+    ]
+  }
+}
