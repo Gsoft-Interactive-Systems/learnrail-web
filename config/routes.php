@@ -2963,10 +2963,16 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
 
         // Handle thumbnail upload
         $thumbnailPath = null;
-        if (!empty($_FILES['thumbnail']['tmp_name']) && $_FILES['thumbnail']['error'] === UPLOAD_ERR_OK) {
-            $uploadDir = __DIR__ . '/../public/uploads/ai-courses/';
+        if (!empty($_FILES['thumbnail']['name']) && $_FILES['thumbnail']['error'] === UPLOAD_ERR_OK) {
+            // Use realpath to handle Windows paths correctly
+            $publicDir = realpath(__DIR__ . '/../public');
+            $uploadDir = $publicDir . DIRECTORY_SEPARATOR . 'uploads' . DIRECTORY_SEPARATOR . 'ai-courses' . DIRECTORY_SEPARATOR;
+
+            error_log("AI Course thumbnail upload - Upload dir: " . $uploadDir);
+
             if (!is_dir($uploadDir)) {
-                mkdir($uploadDir, 0755, true);
+                $created = @mkdir($uploadDir, 0755, true);
+                error_log("AI Course thumbnail upload - Created dir: " . ($created ? 'yes' : 'no'));
             }
 
             $ext = strtolower(pathinfo($_FILES['thumbnail']['name'], PATHINFO_EXTENSION));
@@ -2976,9 +2982,23 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
                 $filename = $slug . '-' . time() . '.' . $ext;
                 $targetPath = $uploadDir . $filename;
 
+                error_log("AI Course thumbnail upload - Target path: " . $targetPath);
+                error_log("AI Course thumbnail upload - Temp file: " . $_FILES['thumbnail']['tmp_name']);
+
                 if (move_uploaded_file($_FILES['thumbnail']['tmp_name'], $targetPath)) {
                     $thumbnailPath = '/uploads/ai-courses/' . $filename;
+                    error_log("AI Course thumbnail upload - Success: " . $thumbnailPath);
+                } else {
+                    error_log("AI Course thumbnail upload - move_uploaded_file failed");
                 }
+            } else {
+                error_log("AI Course thumbnail upload - Invalid extension: " . $ext);
+            }
+        } else {
+            if (empty($_FILES['thumbnail']['name'])) {
+                error_log("AI Course thumbnail upload - No file selected");
+            } elseif ($_FILES['thumbnail']['error'] !== UPLOAD_ERR_OK) {
+                error_log("AI Course thumbnail upload - Upload error code: " . $_FILES['thumbnail']['error']);
             }
         }
 
