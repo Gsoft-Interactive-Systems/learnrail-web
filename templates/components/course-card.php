@@ -5,7 +5,7 @@
  * @param bool $compact - Compact mode for horizontal scroll
  */
 $compact = $compact ?? false;
-$thumbnail = $course['thumbnail'] ?? '/images/course-placeholder.jpg';
+$thumbnail = !empty($course['thumbnail']) ? $course['thumbnail'] : '/images/course-placeholder.jpg';
 $instructor = $course['instructor_name'] ?? $course['instructor']['name'] ?? 'Unknown';
 $rating = number_format($course['rating'] ?? 0, 1);
 $isAICourse = !empty($course['is_ai_course']);
@@ -29,7 +29,13 @@ $courseUrl = $isAICourse ? '/ai-courses/' . e($course['id']) : '/courses/' . e($
 ?>
 <a href="<?= $courseUrl ?>" class="course-card <?= $compact ? 'compact' : '' ?>" style="<?= $compact ? 'width: 280px;' : '' ?>">
     <div class="course-card-thumbnail">
-        <img src="<?= e($thumbnail) ?>" alt="<?= e($course['title'] ?? 'Course') ?>" loading="lazy">
+        <?php if ($isAICourse && empty($course['thumbnail'])): ?>
+            <div class="ai-course-placeholder">
+                <i class="iconoir-brain"></i>
+            </div>
+        <?php else: ?>
+            <img src="<?= e($thumbnail) ?>" alt="<?= e($course['title'] ?? 'Course') ?>" loading="lazy">
+        <?php endif; ?>
         <?php if ($isAICourse): ?>
             <span class="course-card-badge ai-badge"><i class="iconoir-brain"></i> AI-Powered</span>
         <?php elseif (!empty($course['is_featured'])): ?>
