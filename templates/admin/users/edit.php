@@ -138,7 +138,7 @@
                 </div>
                 <div class="d-flex justify-between">
                     <span class="text-secondary">Last Login</span>
-                    <span><?= $user['last_login'] ? format_date($user['last_login']) : 'Never' ?></span>
+                    <span><?= !empty($user['last_login']) ? format_date($user['last_login']) : 'Never' ?></span>
                 </div>
             </div>
         </div>
@@ -165,5 +165,48 @@
 }
 .font-mono {
     font-family: monospace;
+}
+
+/* Improved form styling */
+.form-input,
+.form-select {
+    width: 100%;
+    padding: 12px 16px;
+    font-size: 15px;
+    border: 1px solid var(--gray-200);
+    border-radius: 8px;
+    background: var(--gray-50);
+    transition: all 0.2s ease;
+}
+
+.form-input:focus,
+.form-select:focus {
+    outline: none;
+    border-color: var(--primary);
+    background: white;
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+}
+
+.form-label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 500;
+    color: var(--gray-700);
+    font-size: 14px;
+}
+
+.form-group {
+    margin-bottom: 0;
+}
+
+/* Responsive grid adjustments */
+@media (max-width: 1024px) {
+    .grid.grid-cols-3 {
+        grid-template-columns: 1fr;
+    }
+    .col-span-2,
+    .col-span-1 {
+        grid-column: span 1;
+    }
 }
 </style>
