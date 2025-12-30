@@ -2886,17 +2886,39 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
         $categoryId = !empty($_POST['category_id']) ? (int)$_POST['category_id'] : null;
         $isPremium = isset($_POST['is_premium']) ? 1 : 0;
 
+        // Handle thumbnail upload
+        $thumbnailPath = null;
+        if (!empty($_FILES['thumbnail']['tmp_name']) && $_FILES['thumbnail']['error'] === UPLOAD_ERR_OK) {
+            $uploadDir = __DIR__ . '/../public/uploads/ai-courses/';
+            if (!is_dir($uploadDir)) {
+                mkdir($uploadDir, 0755, true);
+            }
+
+            $ext = strtolower(pathinfo($_FILES['thumbnail']['name'], PATHINFO_EXTENSION));
+            $allowedExts = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+
+            if (in_array($ext, $allowedExts)) {
+                $filename = $slug . '-' . time() . '.' . $ext;
+                $targetPath = $uploadDir . $filename;
+
+                if (move_uploaded_file($_FILES['thumbnail']['tmp_name'], $targetPath)) {
+                    $thumbnailPath = '/uploads/ai-courses/' . $filename;
+                }
+            }
+        }
+
         try {
             $pdo = \Core\Database::getConnection();
             $stmt = $pdo->prepare("
-                INSERT INTO ai_courses (title, slug, description, category_id, level, is_published, is_premium,
+                INSERT INTO ai_courses (title, slug, description, thumbnail, category_id, level, is_published, is_premium,
                                         learning_objectives, estimated_duration, ai_instructions, prerequisites, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
             ");
             $stmt->execute([
                 $title,
                 $slug,
                 $_POST['description'] ?? '',
+                $thumbnailPath,
                 $categoryId,
                 $_POST['level'] ?? 'beginner',
                 $isPublished,
