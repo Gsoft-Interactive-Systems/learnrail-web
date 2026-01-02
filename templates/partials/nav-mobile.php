@@ -31,5 +31,9 @@
             <i class="iconoir-user"></i>
             <span>Profile</span>
         </a>
+        <a href="/logout" class="mobile-nav-item">
+            <i class="iconoir-log-out"></i>
+            <span>Logout</span>
+        </a>
     </div>
 </nav>

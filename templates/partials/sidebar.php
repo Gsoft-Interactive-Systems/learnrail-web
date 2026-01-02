@@ -71,6 +71,11 @@
         </a>
         <?php endif; ?>
 
+        <a href="/logout" class="nav-item" style="color: var(--text-secondary);">
+            <i class="iconoir-log-out"></i>
+            <span>Logout</span>
+        </a>
+
         <div class="sidebar-user">
             <div class="sidebar-user-avatar">
                 <?php if (!empty($user['avatar'])): ?>
