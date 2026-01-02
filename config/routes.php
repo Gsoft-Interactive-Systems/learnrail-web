@@ -268,6 +268,62 @@ $router->group(['middleware' => 'guest'], function ($router) {
         }
         redirect('/forgot-password');
     });
+
+    // Reset Password
+    $router->get('/reset-password', function () {
+        $token = $_GET['token'] ?? '';
+
+        if (empty($token)) {
+            flash('error', 'Invalid or missing reset token');
+            redirect('/forgot-password');
+        }
+
+        View::render('auth/reset-password', [
+            'title' => 'Reset Password',
+            'token' => $token
+        ], 'auth');
+    });
+
+    $router->post('/reset-password', function () {
+        if (!verify_csrf($_POST['_token'] ?? '')) {
+            flash('error', 'Invalid request');
+            redirect('/forgot-password');
+        }
+
+        $token = $_POST['token'] ?? '';
+        $password = $_POST['password'] ?? '';
+        $passwordConfirmation = $_POST['password_confirmation'] ?? '';
+
+        if (empty($token)) {
+            flash('error', 'Invalid or missing reset token');
+            redirect('/forgot-password');
+        }
+
+        if (strlen($password) < 8) {
+            flash('error', 'Password must be at least 8 characters');
+            redirect('/reset-password?token=' . urlencode($token));
+        }
+
+        if ($password !== $passwordConfirmation) {
+            flash('error', 'Passwords do not match');
+            redirect('/reset-password?token=' . urlencode($token));
+        }
+
+        // Call API to reset password
+        $api = new \Core\ApiClient();
+        $response = $api->post('/auth/reset-password', [
+            'token' => $token,
+            'password' => $password
+        ]);
+
+        if ($response['success']) {
+            flash('success', 'Password reset successful! You can now login with your new password.');
+            redirect('/login');
+        } else {
+            flash('error', $response['data']['message'] ?? 'Failed to reset password. The link may have expired.');
+            redirect('/forgot-password');
+        }
+    });
 });
 
 // ===========================================
