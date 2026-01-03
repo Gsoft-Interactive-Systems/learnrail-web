@@ -2797,10 +2797,23 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
             }
         }
 
-        // Send approval email to user
-        sendPaymentApprovalEmail($payment['email'], $payment['first_name'], $payment['amount'], $endDate);
+        // Create in-app notification for user
+        try {
+            \Core\Database::execute("
+                INSERT INTO notifications (user_id, title, message, type, data, created_at)
+                VALUES (?, ?, ?, ?, ?, NOW())
+            ", [
+                $payment['user_id'],
+                'Payment Approved!',
+                'Your payment has been verified and your subscription is now active until ' . ($endDate ?? 'N/A') . '.',
+                'payment',
+                json_encode(['payment_id' => $id, 'end_date' => $endDate])
+            ]);
+        } catch (\Exception $e) {
+            // Notification table might not exist, continue anyway
+        }
 
-        View::json(['success' => true, 'message' => 'Payment approved and user notified']);
+        View::json(['success' => true, 'message' => 'Payment approved and subscription activated']);
     });
 
     // Legacy POST route for backward compatibility
@@ -2874,10 +2887,23 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
             ", [$payment['subscription_id']]);
         }
 
-        // Send rejection email to user
-        sendPaymentRejectionEmail($payment['email'], $payment['first_name'], $payment['amount'], $reason);
+        // Create in-app notification for user
+        try {
+            \Core\Database::execute("
+                INSERT INTO notifications (user_id, title, message, type, data, created_at)
+                VALUES (?, ?, ?, ?, ?, NOW())
+            ", [
+                $payment['user_id'],
+                'Payment Issue',
+                'Your payment could not be verified. Reason: ' . $reason,
+                'payment',
+                json_encode(['payment_id' => $id, 'reason' => $reason])
+            ]);
+        } catch (\Exception $e) {
+            // Notification table might not exist, continue anyway
+        }
 
-        View::json(['success' => true, 'message' => 'Payment rejected and user notified']);
+        View::json(['success' => true, 'message' => 'Payment rejected']);
     });
 
     // Subscriptions
