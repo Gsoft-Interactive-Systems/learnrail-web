@@ -18,6 +18,7 @@
                     'goal' => 'target',
                     'partner' => 'group',
                     'subscription' => 'credit-card',
+                    'payment' => 'wallet',
                     'reminder' => 'bell',
                     default => 'bell-notification'
                 };
@@ -27,6 +28,7 @@
                     'goal' => 'success',
                     'partner' => 'info',
                     'subscription' => 'danger',
+                    'payment' => 'success',
                     default => 'secondary'
                 };
                 ?>
