@@ -252,9 +252,23 @@ if (count($pendingBankTransfers) > 0):
 </div>
 
 <script>
+// Wait for dependencies to be available
+document.addEventListener('DOMContentLoaded', function() {
+    // Ensure API is available (might be defined after this script)
+    if (typeof API === 'undefined') {
+        console.error('API not loaded - buttons will not work');
+        return;
+    }
+});
+
 let currentPaymentId = null;
 
 async function viewPayment(id) {
+    console.log('viewPayment called with id:', id);
+    if (typeof API === 'undefined') {
+        alert('Error: Page not fully loaded. Please refresh.');
+        return;
+    }
     currentPaymentId = id;
     try {
         const response = await API.get('/admin/payments/' + id);
@@ -352,6 +366,11 @@ async function viewPayment(id) {
 }
 
 async function approvePayment(id) {
+    console.log('approvePayment called with id:', id);
+    if (typeof API === 'undefined') {
+        alert('Error: Page not fully loaded. Please refresh.');
+        return;
+    }
     if (!confirm('Are you sure you want to approve this payment? This will activate the user\'s subscription.')) {
         return;
     }
@@ -378,20 +397,36 @@ async function approvePayment(id) {
 }
 
 function rejectPayment(id) {
+    console.log('rejectPayment called with id:', id);
+    if (typeof Modal === 'undefined') {
+        alert('Error: Page not fully loaded. Please refresh.');
+        return;
+    }
     currentPaymentId = id;
     document.getElementById('reject-reason').value = '';
     Modal.open('reject-modal');
 }
 
-document.getElementById('confirm-reject-btn').addEventListener('click', async function() {
+// Wait for DOM before adding event listener
+document.addEventListener('DOMContentLoaded', function() {
+    const rejectBtn = document.getElementById('confirm-reject-btn');
+    if (rejectBtn) {
+        rejectBtn.addEventListener('click', handleRejectConfirm);
+    }
+});
+
+async function handleRejectConfirm() {
     const reason = document.getElementById('reject-reason').value.trim();
     if (!reason) {
         Toast.error('Please provide a rejection reason');
         return;
     }
 
-    this.disabled = true;
-    this.innerHTML = '<span class="loading-spinner" style="width:16px;height:16px;border-width:2px;"></span> Rejecting...';
+    const btn = document.getElementById('confirm-reject-btn');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="loading-spinner" style="width:16px;height:16px;border-width:2px;"></span> Rejecting...';
+    }
 
     try {
         const response = await API.post('/admin/payments/' + currentPaymentId + '/reject', { reason });
@@ -403,10 +438,12 @@ document.getElementById('confirm-reject-btn').addEventListener('click', async fu
     } catch (error) {
         Toast.error(error.message || 'Failed to reject payment');
     } finally {
-        this.disabled = false;
-        this.innerHTML = 'Reject Payment';
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = 'Reject Payment';
+        }
     }
-});
+}
 
 function formatCurrency(amount) {
     return new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN' }).format(amount);
@@ -483,12 +520,14 @@ code {
 }
 
 .btn-success {
-    background: var(--success);
-    color: white;
+    background: #10B981 !important;
+    color: white !important;
+    border: 1px solid #10B981 !important;
 }
 
 .btn-success:hover {
-    background: #059669;
+    background: #059669 !important;
+    border-color: #059669 !important;
 }
 
 .btn-danger {
