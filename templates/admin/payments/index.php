@@ -169,16 +169,16 @@ if (count($pendingBankTransfers) > 0):
                                 <span class="badge <?= $statusBadge ?>"><?= ucfirst($payment['status'] ?? 'pending') ?></span>
                             </td>
                             <td>
-                                <div class="d-flex gap-1">
-                                    <button class="btn btn-ghost btn-sm" onclick="viewPayment(<?= $payment['id'] ?>)" title="View Details">
-                                        <i class="iconoir-eye"></i>
+                                <div class="d-flex gap-2">
+                                    <button class="btn btn-outline btn-sm" onclick="viewPayment(<?= $payment['id'] ?>)" title="View Details">
+                                        <i class="iconoir-eye"></i> View
                                     </button>
                                     <?php if (($payment['status'] ?? '') === 'pending'): ?>
                                         <button class="btn btn-success btn-sm" onclick="approvePayment(<?= $payment['id'] ?>)" title="Approve Payment">
-                                            <i class="iconoir-check"></i>
+                                            <i class="iconoir-check"></i> Approve
                                         </button>
-                                        <button class="btn btn-danger btn-sm" onclick="rejectPayment(<?= $payment['id'] ?>)" title="Reject Payment">
-                                            <i class="iconoir-xmark"></i>
+                                        <button class="btn btn-outline-danger btn-sm" onclick="rejectPayment(<?= $payment['id'] ?>)" title="Reject Payment">
+                                            <i class="iconoir-xmark"></i> Reject
                                         </button>
                                     <?php endif; ?>
                                 </div>
@@ -357,7 +357,7 @@ async function approvePayment(id) {
     }
 
     try {
-        const response = await API.put('/admin/payments/' + id + '/approve');
+        const response = await API.post('/admin/payments/' + id + '/approve');
         if (response.success) {
             Toast.success('Payment approved! User subscription activated.');
             // Update the row
@@ -394,7 +394,7 @@ document.getElementById('confirm-reject-btn').addEventListener('click', async fu
     this.innerHTML = '<span class="loading-spinner" style="width:16px;height:16px;border-width:2px;"></span> Rejecting...';
 
     try {
-        const response = await API.put('/admin/payments/' + currentPaymentId + '/reject', { reason });
+        const response = await API.post('/admin/payments/' + currentPaymentId + '/reject', { reason });
         if (response.success) {
             Toast.success('Payment rejected. User has been notified.');
             Modal.close('reject-modal');
@@ -498,6 +498,17 @@ code {
 
 .btn-danger:hover {
     background: #DC2626;
+}
+
+.btn-outline-danger {
+    background: transparent;
+    color: var(--danger);
+    border: 1px solid var(--danger);
+}
+
+.btn-outline-danger:hover {
+    background: var(--danger);
+    color: white;
 }
 
 .badge-info {

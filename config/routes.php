@@ -2906,6 +2906,52 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
         View::json(['success' => true, 'message' => 'Payment rejected']);
     });
 
+    // POST fallback for reject (for servers that don't support PUT)
+    $router->post('/payments/{id}/reject', function ($id) {
+        $input = json_decode(file_get_contents('php://input'), true) ?? [];
+        $reason = $input['reason'] ?? 'Payment could not be verified';
+
+        $payment = \Core\Database::queryOne("
+            SELECT p.*, u.first_name, u.email
+            FROM payments p
+            JOIN users u ON p.user_id = u.id
+            WHERE p.id = ?
+        ", [$id]);
+
+        if (!$payment) {
+            View::json(['success' => false, 'message' => 'Payment not found'], 404);
+            return;
+        }
+
+        if ($payment['status'] !== 'pending') {
+            View::json(['success' => false, 'message' => 'Payment already processed'], 400);
+            return;
+        }
+
+        \Core\Database::execute("UPDATE payments SET status = 'failed' WHERE id = ?", [$id]);
+
+        if ($payment['subscription_id']) {
+            \Core\Database::execute("
+                UPDATE subscriptions SET status = 'cancelled', updated_at = NOW() WHERE id = ?
+            ", [$payment['subscription_id']]);
+        }
+
+        try {
+            \Core\Database::execute("
+                INSERT INTO notifications (user_id, title, message, type, data, created_at)
+                VALUES (?, ?, ?, ?, ?, NOW())
+            ", [
+                $payment['user_id'],
+                'Payment Issue',
+                'Your payment could not be verified. Reason: ' . $reason,
+                'payment',
+                json_encode(['payment_id' => $id, 'reason' => $reason])
+            ]);
+        } catch (\Exception $e) {}
+
+        View::json(['success' => true, 'message' => 'Payment rejected']);
+    });
+
     // Subscriptions
     $router->get('/subscriptions', function () {
         $subscriptions = \Core\Database::query("
