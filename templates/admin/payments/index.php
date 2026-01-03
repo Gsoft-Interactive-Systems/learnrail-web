@@ -3,10 +3,14 @@
     <div>
         <p class="text-secondary">View and manage payment transactions</p>
     </div>
-    <button class="btn btn-outline" onclick="exportPayments()">
-        <i class="iconoir-download"></i>
-        Export CSV
-    </button>
+    <div class="d-flex gap-2">
+        <!-- Debug test button -->
+        <button class="btn btn-warning btn-sm" onclick="alert('JavaScript onclick works!')">Test JS</button>
+        <button class="btn btn-outline" onclick="exportPayments()">
+            <i class="iconoir-download"></i>
+            Export CSV
+        </button>
+    </div>
 </div>
 
 <!-- Stats -->
@@ -252,8 +256,18 @@ if (count($pendingBankTransfers) > 0):
 </div>
 
 <script>
+// Debug: Script is loading
+console.log('=== PAYMENTS ADMIN SCRIPT LOADING ===');
+console.log('API defined?', typeof API !== 'undefined');
+console.log('Modal defined?', typeof Modal !== 'undefined');
+console.log('Toast defined?', typeof Toast !== 'undefined');
+
 // Wait for dependencies to be available
 document.addEventListener('DOMContentLoaded', function() {
+    console.log('=== DOMContentLoaded fired ===');
+    console.log('API now defined?', typeof API !== 'undefined');
+    console.log('Modal now defined?', typeof Modal !== 'undefined');
+
     // Ensure API is available (might be defined after this script)
     if (typeof API === 'undefined') {
         console.error('API not loaded - buttons will not work');
@@ -473,6 +487,16 @@ function exportPayments() {
     params.set('export', 'csv');
     window.location.href = '/admin/payments?' + params.toString();
 }
+
+// Make functions globally accessible for onclick handlers
+window.viewPayment = viewPayment;
+window.approvePayment = approvePayment;
+window.rejectPayment = rejectPayment;
+window.exportPayments = exportPayments;
+
+console.log('=== PAYMENTS ADMIN SCRIPT LOADED SUCCESSFULLY ===');
+console.log('viewPayment is:', typeof viewPayment);
+console.log('window.viewPayment is:', typeof window.viewPayment);
 </script>
 
 <style>
