@@ -9,7 +9,8 @@
       "Bash(dir:*)",
       "Bash(if not exist \"c:\\\\Users\\\\HP\\\\Documents\\\\JOBS\\\\learnrail-web\\\\public\\\\uploads\" mkdir \"c:\\\\Users\\\\HP\\\\Documents\\\\JOBS\\\\learnrail-web\\\\public\\\\uploads\")",
       "Bash(if not exist \"c:\\\\Users\\\\HP\\\\Documents\\\\JOBS\\\\learnrail-web\\\\public\\\\uploads\\\\courses\" mkdir \"c:\\\\Users\\\\HP\\\\Documents\\\\JOBS\\\\learnrail-web\\\\public\\\\uploads\\\\courses\")",
-      "Bash(if not exist \"c:\\\\Users\\\\HP\\\\Documents\\\\JOBS\\\\learnrail-web\\\\templates\\\\ai-courses\" mkdir \"c:\\\\Users\\\\HP\\\\Documents\\\\JOBS\\\\learnrail-web\\\\templates\\\\ai-courses\")"
+      "Bash(if not exist \"c:\\\\Users\\\\HP\\\\Documents\\\\JOBS\\\\learnrail-web\\\\templates\\\\ai-courses\" mkdir \"c:\\\\Users\\\\HP\\\\Documents\\\\JOBS\\\\learnrail-web\\\\templates\\\\ai-courses\")",
+      "Bash(composer install:*)"
     ]
   }
 }

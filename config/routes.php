@@ -987,13 +987,19 @@ $router->group(['middleware' => 'auth'], function ($router) {
     $router->post('/subscription/payment', function () {
         global $auth;
 
-        if (!verify_csrf($_POST['_token'] ?? '')) {
+        // Handle JSON input
+        $input = json_decode(file_get_contents('php://input'), true) ?? [];
+
+        // Check CSRF from header (sent by API.js) or from POST/JSON body
+        $csrfToken = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? $input['_token'] ?? $_POST['_token'] ?? '';
+        if (!verify_csrf($csrfToken)) {
             View::json(['success' => false, 'message' => 'Invalid request'], 400);
+            return;
         }
 
         $userId = $auth->user()['id'] ?? 0;
-        $planId = $_POST['plan_id'] ?? '';
-        $paymentMethod = $_POST['payment_method'] ?? 'paystack';
+        $planId = $input['plan_id'] ?? $_POST['plan_id'] ?? '';
+        $paymentMethod = $input['payment_method'] ?? $_POST['payment_method'] ?? 'bank_transfer';
 
         // Get plan details
         $plan = \Core\Database::queryOne("SELECT * FROM subscription_plans WHERE id = ?", [$planId]);
@@ -1018,15 +1024,111 @@ $router->group(['middleware' => 'auth'], function ($router) {
             VALUES (?, ?, ?, ?, ?, ?, 'pending', NOW())
         ", [$userId, $subscriptionId, $plan['price'], $plan['currency'] ?? 'NGN', $paymentMethod, $reference]);
 
-        // Return payment initialization data (for Paystack, etc.)
+        // Prepare response based on payment method
+        $responseData = [
+            'reference' => $reference,
+            'amount' => $plan['price'],
+            'email' => $auth->user()['email'] ?? '',
+            'plan_name' => $plan['name'],
+            'payment_method' => $paymentMethod
+        ];
+
+        // Add bank details for bank transfer
+        if ($paymentMethod === 'bank_transfer') {
+            $responseData['bank_details'] = [
+                'bank_name' => 'Access Bank',
+                'account_number' => '1234567890',
+                'account_name' => 'Learnrail Limited'
+            ];
+            $responseData['instructions'] = 'Please transfer the exact amount to the bank account above and upload your payment receipt. Your subscription will be activated after verification.';
+        }
+
+        // Add Paystack data if using Paystack
+        if ($paymentMethod === 'paystack') {
+            $responseData['amount'] = $plan['price'] * 100; // Convert to kobo for Paystack
+        }
+
         View::json([
             'success' => true,
-            'data' => [
-                'reference' => $reference,
-                'amount' => $plan['price'] * 100, // Convert to kobo for Paystack
-                'email' => $auth->user()['email'] ?? '',
-                'plan_name' => $plan['name']
-            ]
+            'data' => $responseData
+        ]);
+    });
+
+    // Upload payment receipt for bank transfer
+    $router->post('/subscription/upload-receipt', function () {
+        global $auth;
+
+        // Check CSRF from header
+        $csrfToken = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? $_POST['_token'] ?? '';
+        if (!verify_csrf($csrfToken)) {
+            View::json(['success' => false, 'message' => 'Invalid request'], 400);
+            return;
+        }
+
+        $userId = $auth->user()['id'] ?? 0;
+        $reference = $_POST['reference'] ?? '';
+
+        if (empty($reference)) {
+            View::json(['success' => false, 'message' => 'Payment reference is required'], 400);
+            return;
+        }
+
+        // Verify payment exists and belongs to user
+        $payment = \Core\Database::queryOne("
+            SELECT * FROM payments WHERE reference = ? AND user_id = ? AND status = 'pending'
+        ", [$reference, $userId]);
+
+        if (!$payment) {
+            View::json(['success' => false, 'message' => 'Payment not found or already processed'], 400);
+            return;
+        }
+
+        // Handle file upload
+        if (!isset($_FILES['receipt']) || $_FILES['receipt']['error'] !== UPLOAD_ERR_OK) {
+            View::json(['success' => false, 'message' => 'Please upload a valid receipt'], 400);
+            return;
+        }
+
+        $file = $_FILES['receipt'];
+        $allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'application/pdf'];
+        $maxSize = 5 * 1024 * 1024; // 5MB
+
+        if (!in_array($file['type'], $allowedTypes)) {
+            View::json(['success' => false, 'message' => 'Invalid file type. Please upload an image or PDF.'], 400);
+            return;
+        }
+
+        if ($file['size'] > $maxSize) {
+            View::json(['success' => false, 'message' => 'File size must be less than 5MB'], 400);
+            return;
+        }
+
+        // Create uploads directory if it doesn't exist
+        $uploadDir = PUBLIC_PATH . '/uploads/receipts/';
+        if (!is_dir($uploadDir)) {
+            mkdir($uploadDir, 0755, true);
+        }
+
+        // Generate unique filename
+        $extension = pathinfo($file['name'], PATHINFO_EXTENSION);
+        $filename = 'receipt_' . $reference . '_' . time() . '.' . $extension;
+        $filepath = $uploadDir . $filename;
+
+        if (!move_uploaded_file($file['tmp_name'], $filepath)) {
+            View::json(['success' => false, 'message' => 'Failed to save file'], 500);
+            return;
+        }
+
+        // Update payment with receipt path
+        $receiptUrl = '/uploads/receipts/' . $filename;
+        \Core\Database::execute("
+            UPDATE payments SET receipt_url = ?, updated_at = NOW() WHERE id = ?
+        ", [$receiptUrl, $payment['id']]);
+
+        View::json([
+            'success' => true,
+            'message' => 'Receipt uploaded successfully. We will verify your payment shortly.',
+            'data' => ['receipt_url' => $receiptUrl]
         ]);
     });
 
@@ -2566,7 +2668,36 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
         $perPage = 20;
         $offset = ($page - 1) * $perPage;
 
-        $total = (int) \Core\Database::scalar("SELECT COUNT(*) FROM payments");
+        // Build query with filters
+        $where = ['1=1'];
+        $params = [];
+
+        if (!empty($_GET['status'])) {
+            $where[] = 'p.status = ?';
+            $params[] = $_GET['status'];
+        }
+        if (!empty($_GET['method'])) {
+            $where[] = 'p.payment_method = ?';
+            $params[] = $_GET['method'];
+        }
+        if (!empty($_GET['search'])) {
+            $where[] = '(u.email LIKE ? OR p.reference LIKE ?)';
+            $searchTerm = '%' . $_GET['search'] . '%';
+            $params[] = $searchTerm;
+            $params[] = $searchTerm;
+        }
+
+        $whereClause = implode(' AND ', $where);
+
+        $total = (int) \Core\Database::scalar("
+            SELECT COUNT(*) FROM payments p
+            JOIN users u ON p.user_id = u.id
+            WHERE {$whereClause}
+        ", $params);
+
+        // Add pagination params
+        $params[] = $perPage;
+        $params[] = $offset;
 
         $payments = \Core\Database::query("
             SELECT p.*, u.first_name, u.last_name, u.email,
@@ -2575,26 +2706,69 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
             JOIN users u ON p.user_id = u.id
             LEFT JOIN subscriptions s ON p.subscription_id = s.id
             LEFT JOIN subscription_plans sp ON s.plan_id = sp.id
+            WHERE {$whereClause}
             ORDER BY p.created_at DESC
-            LIMIT {$perPage} OFFSET {$offset}
+            LIMIT ? OFFSET ?
+        ", $params);
+
+        // Get stats
+        $stats = \Core\Database::queryOne("
+            SELECT
+                COALESCE(SUM(CASE WHEN status = 'completed' THEN amount ELSE 0 END), 0) as total_revenue,
+                COALESCE(SUM(CASE WHEN status = 'completed' AND created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) THEN amount ELSE 0 END), 0) as this_month,
+                COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending,
+                COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed
+            FROM payments
         ");
 
         View::render('admin/payments/index', [
             'title' => 'Payments',
             'payments' => $payments,
-            'meta' => [
-                'current_page' => $page,
-                'last_page' => ceil($total / $perPage),
-                'total' => $total
-            ]
+            'stats' => $stats,
+            'currentPage' => $page,
+            'totalPages' => ceil($total / $perPage),
+            'totalPayments' => $total
         ], 'admin');
     });
 
-    $router->post('/payments/{id}/approve', function ($id) {
-        // Get payment
-        $payment = \Core\Database::queryOne("SELECT * FROM payments WHERE id = ?", [$id]);
+    // Get single payment
+    $router->get('/payments/{id}', function ($id) {
+        $payment = \Core\Database::queryOne("
+            SELECT p.*, u.first_name, u.last_name, u.email,
+                   sp.name as plan_name
+            FROM payments p
+            JOIN users u ON p.user_id = u.id
+            LEFT JOIN subscriptions s ON p.subscription_id = s.id
+            LEFT JOIN subscription_plans sp ON s.plan_id = sp.id
+            WHERE p.id = ?
+        ", [$id]);
+
         if (!$payment) {
-            View::json(['success' => false, 'message' => 'Payment not found']);
+            View::json(['success' => false, 'message' => 'Payment not found'], 404);
+            return;
+        }
+
+        View::json(['success' => true, 'data' => $payment]);
+    });
+
+    // Approve payment
+    $router->put('/payments/{id}/approve', function ($id) {
+        // Get payment with user info
+        $payment = \Core\Database::queryOne("
+            SELECT p.*, u.first_name, u.email
+            FROM payments p
+            JOIN users u ON p.user_id = u.id
+            WHERE p.id = ?
+        ", [$id]);
+
+        if (!$payment) {
+            View::json(['success' => false, 'message' => 'Payment not found'], 404);
+            return;
+        }
+
+        if ($payment['status'] !== 'pending') {
+            View::json(['success' => false, 'message' => 'Payment already processed'], 400);
+            return;
         }
 
         // Update payment status
@@ -2603,11 +2777,14 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
         ", [$id]);
 
         // Activate subscription if exists
+        $endDate = null;
         if ($payment['subscription_id']) {
             $subscription = \Core\Database::queryOne("SELECT * FROM subscriptions WHERE id = ?", [$payment['subscription_id']]);
             if ($subscription) {
                 $plan = \Core\Database::queryOne("SELECT * FROM subscription_plans WHERE id = ?", [$subscription['plan_id']]);
                 $durationDays = $plan['duration_days'] ?? 30;
+
+                $endDate = date('Y-m-d', strtotime("+{$durationDays} days"));
 
                 \Core\Database::execute("
                     UPDATE subscriptions SET
@@ -2620,7 +2797,87 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
             }
         }
 
+        // Send approval email to user
+        sendPaymentApprovalEmail($payment['email'], $payment['first_name'], $payment['amount'], $endDate);
+
+        View::json(['success' => true, 'message' => 'Payment approved and user notified']);
+    });
+
+    // Legacy POST route for backward compatibility
+    $router->post('/payments/{id}/approve', function ($id) {
+        // Redirect to PUT handler
+        $payment = \Core\Database::queryOne("
+            SELECT p.*, u.first_name, u.email
+            FROM payments p
+            JOIN users u ON p.user_id = u.id
+            WHERE p.id = ?
+        ", [$id]);
+
+        if (!$payment) {
+            View::json(['success' => false, 'message' => 'Payment not found'], 404);
+            return;
+        }
+
+        if ($payment['status'] !== 'pending') {
+            View::json(['success' => false, 'message' => 'Payment already processed'], 400);
+            return;
+        }
+
+        \Core\Database::execute("UPDATE payments SET status = 'completed', paid_at = NOW() WHERE id = ?", [$id]);
+
+        if ($payment['subscription_id']) {
+            $subscription = \Core\Database::queryOne("SELECT * FROM subscriptions WHERE id = ?", [$payment['subscription_id']]);
+            if ($subscription) {
+                $plan = \Core\Database::queryOne("SELECT * FROM subscription_plans WHERE id = ?", [$subscription['plan_id']]);
+                $durationDays = $plan['duration_days'] ?? 30;
+                \Core\Database::execute("
+                    UPDATE subscriptions SET status = 'active', start_date = CURDATE(), end_date = DATE_ADD(CURDATE(), INTERVAL ? DAY), updated_at = NOW() WHERE id = ?
+                ", [$durationDays, $payment['subscription_id']]);
+            }
+        }
+
         View::json(['success' => true, 'message' => 'Payment approved']);
+    });
+
+    // Reject payment
+    $router->put('/payments/{id}/reject', function ($id) {
+        $input = json_decode(file_get_contents('php://input'), true) ?? [];
+        $reason = $input['reason'] ?? 'Payment could not be verified';
+
+        // Get payment with user info
+        $payment = \Core\Database::queryOne("
+            SELECT p.*, u.first_name, u.email
+            FROM payments p
+            JOIN users u ON p.user_id = u.id
+            WHERE p.id = ?
+        ", [$id]);
+
+        if (!$payment) {
+            View::json(['success' => false, 'message' => 'Payment not found'], 404);
+            return;
+        }
+
+        if ($payment['status'] !== 'pending') {
+            View::json(['success' => false, 'message' => 'Payment already processed'], 400);
+            return;
+        }
+
+        // Update payment status
+        \Core\Database::execute("
+            UPDATE payments SET status = 'failed' WHERE id = ?
+        ", [$id]);
+
+        // Cancel subscription
+        if ($payment['subscription_id']) {
+            \Core\Database::execute("
+                UPDATE subscriptions SET status = 'cancelled', updated_at = NOW() WHERE id = ?
+            ", [$payment['subscription_id']]);
+        }
+
+        // Send rejection email to user
+        sendPaymentRejectionEmail($payment['email'], $payment['first_name'], $payment['amount'], $reason);
+
+        View::json(['success' => true, 'message' => 'Payment rejected and user notified']);
     });
 
     // Subscriptions

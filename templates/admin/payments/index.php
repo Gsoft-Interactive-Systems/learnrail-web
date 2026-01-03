@@ -1,7 +1,7 @@
 <!-- Header -->
 <div class="d-flex justify-between items-center mb-6">
     <div>
-        <p class="text-secondary">View all payment transactions</p>
+        <p class="text-secondary">View and manage payment transactions</p>
     </div>
     <button class="btn btn-outline" onclick="exportPayments()">
         <i class="iconoir-download"></i>
@@ -14,25 +14,25 @@
     <div class="card">
         <div class="card-body">
             <div class="text-sm text-secondary mb-1">Total Revenue</div>
-            <div class="text-2xl font-bold">₦<?= number_format($stats['total_revenue'] ?? 0) ?></div>
+            <div class="text-2xl font-bold"><?= format_currency($stats['total_revenue'] ?? 0) ?></div>
         </div>
     </div>
     <div class="card">
         <div class="card-body">
             <div class="text-sm text-secondary mb-1">This Month</div>
-            <div class="text-2xl font-bold text-success">₦<?= number_format($stats['this_month'] ?? 0) ?></div>
+            <div class="text-2xl font-bold text-success"><?= format_currency($stats['this_month'] ?? 0) ?></div>
         </div>
     </div>
     <div class="card">
         <div class="card-body">
-            <div class="text-sm text-secondary mb-1">Successful</div>
-            <div class="text-2xl font-bold text-primary"><?= number_format($stats['successful'] ?? 0) ?></div>
+            <div class="text-sm text-secondary mb-1">Pending</div>
+            <div class="text-2xl font-bold text-warning"><?= number_format($stats['pending'] ?? 0) ?></div>
         </div>
     </div>
     <div class="card">
         <div class="card-body">
-            <div class="text-sm text-secondary mb-1">Failed</div>
-            <div class="text-2xl font-bold text-danger"><?= number_format($stats['failed'] ?? 0) ?></div>
+            <div class="text-sm text-secondary mb-1">Completed</div>
+            <div class="text-2xl font-bold text-primary"><?= number_format($stats['completed'] ?? 0) ?></div>
         </div>
     </div>
 </div>
@@ -40,8 +40,8 @@
 <!-- Filters -->
 <div class="card mb-6">
     <div class="card-body">
-        <form class="d-flex gap-4 items-end" method="GET">
-            <div class="form-group mb-0" style="flex: 1;">
+        <form class="d-flex gap-4 items-end flex-wrap" method="GET">
+            <div class="form-group mb-0" style="flex: 1; min-width: 200px;">
                 <label class="form-label">Search</label>
                 <input type="text" name="search" class="form-input" placeholder="User email or reference..." value="<?= e($_GET['search'] ?? '') ?>">
             </div>
@@ -49,9 +49,18 @@
                 <label class="form-label">Status</label>
                 <select name="status" class="form-select">
                     <option value="">All Status</option>
-                    <option value="success" <?= ($_GET['status'] ?? '') === 'success' ? 'selected' : '' ?>>Success</option>
+                    <option value="completed" <?= ($_GET['status'] ?? '') === 'completed' ? 'selected' : '' ?>>Completed</option>
                     <option value="pending" <?= ($_GET['status'] ?? '') === 'pending' ? 'selected' : '' ?>>Pending</option>
                     <option value="failed" <?= ($_GET['status'] ?? '') === 'failed' ? 'selected' : '' ?>>Failed</option>
+                </select>
+            </div>
+            <div class="form-group mb-0">
+                <label class="form-label">Method</label>
+                <select name="method" class="form-select">
+                    <option value="">All Methods</option>
+                    <option value="bank_transfer" <?= ($_GET['method'] ?? '') === 'bank_transfer' ? 'selected' : '' ?>>Bank Transfer</option>
+                    <option value="paystack" <?= ($_GET['method'] ?? '') === 'paystack' ? 'selected' : '' ?>>Paystack</option>
+                    <option value="xpress" <?= ($_GET['method'] ?? '') === 'xpress' ? 'selected' : '' ?>>Xpress</option>
                 </select>
             </div>
             <div class="form-group mb-0">
@@ -66,9 +75,28 @@
                 <i class="iconoir-search"></i>
                 Filter
             </button>
+            <a href="/admin/payments" class="btn btn-ghost">Clear</a>
         </form>
     </div>
 </div>
+
+<!-- Pending Bank Transfers Alert -->
+<?php
+$pendingBankTransfers = array_filter($payments ?? [], fn($p) =>
+    ($p['status'] ?? '') === 'pending' && ($p['payment_method'] ?? '') === 'bank_transfer'
+);
+if (count($pendingBankTransfers) > 0):
+?>
+<div class="alert alert-warning mb-6" style="background: #FEF3C7; border: 1px solid #FCD34D; color: #92400E; padding: 16px; border-radius: 8px;">
+    <div class="d-flex items-center gap-3">
+        <i class="iconoir-warning-triangle text-xl"></i>
+        <div>
+            <strong><?= count($pendingBankTransfers) ?> pending bank transfer(s)</strong> require verification.
+            <a href="?status=pending&method=bank_transfer" style="color: inherit; text-decoration: underline;">View all</a>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
 
 <!-- Payments Table -->
 <div class="card">
@@ -89,28 +117,50 @@
             <tbody>
                 <?php if (!empty($payments)): ?>
                     <?php foreach ($payments as $payment): ?>
-                        <tr>
+                        <tr data-payment-id="<?= e($payment['id'] ?? '') ?>">
                             <td>
                                 <code class="text-sm"><?= e($payment['reference'] ?? '') ?></code>
+                                <?php if (!empty($payment['receipt_url'])): ?>
+                                    <div class="mt-1">
+                                        <a href="<?= e($payment['receipt_url']) ?>" target="_blank" class="text-xs text-primary">
+                                            <i class="iconoir-page"></i> Receipt
+                                        </a>
+                                    </div>
+                                <?php endif; ?>
                             </td>
                             <td>
                                 <div>
-                                    <div class="font-medium"><?= e($payment['user_name'] ?? '') ?></div>
-                                    <div class="text-sm text-secondary"><?= e($payment['user_email'] ?? '') ?></div>
+                                    <div class="font-medium"><?= e(($payment['first_name'] ?? '') . ' ' . ($payment['last_name'] ?? '')) ?></div>
+                                    <div class="text-sm text-secondary"><?= e($payment['email'] ?? $payment['user_email'] ?? '') ?></div>
                                 </div>
                             </td>
-                            <td><?= ucfirst($payment['plan'] ?? 'basic') ?></td>
-                            <td class="font-semibold">₦<?= number_format($payment['amount'] ?? 0) ?></td>
+                            <td><?= e($payment['plan_name'] ?? $payment['plan'] ?? 'N/A') ?></td>
+                            <td class="font-semibold"><?= format_currency($payment['amount'] ?? 0) ?></td>
                             <td>
-                                <span class="badge badge-secondary"><?= ucfirst($payment['payment_method'] ?? 'paystack') ?></span>
+                                <?php
+                                $methodBadge = match($payment['payment_method'] ?? '') {
+                                    'bank_transfer' => 'badge-secondary',
+                                    'paystack' => 'badge-info',
+                                    'xpress' => 'badge-purple',
+                                    default => 'badge-secondary'
+                                };
+                                $methodLabel = match($payment['payment_method'] ?? '') {
+                                    'bank_transfer' => 'Bank Transfer',
+                                    'paystack' => 'Paystack',
+                                    'xpress' => 'Xpress',
+                                    default => ucfirst($payment['payment_method'] ?? 'Unknown')
+                                };
+                                ?>
+                                <span class="badge <?= $methodBadge ?>"><?= $methodLabel ?></span>
                             </td>
                             <td>
                                 <div><?= format_date($payment['created_at'] ?? '') ?></div>
-                                <div class="text-sm text-secondary"><?= date('H:i', strtotime($payment['created_at'] ?? '')) ?></div>
+                                <div class="text-sm text-secondary"><?= date('H:i', strtotime($payment['created_at'] ?? 'now')) ?></div>
                             </td>
                             <td>
                                 <?php
                                 $statusBadge = match($payment['status'] ?? 'pending') {
+                                    'completed' => 'badge-success',
                                     'success' => 'badge-success',
                                     'failed' => 'badge-danger',
                                     default => 'badge-warning'
@@ -119,9 +169,19 @@
                                 <span class="badge <?= $statusBadge ?>"><?= ucfirst($payment['status'] ?? 'pending') ?></span>
                             </td>
                             <td>
-                                <button class="btn btn-ghost btn-sm" onclick="viewPayment('<?= e($payment['reference'] ?? '') ?>')" title="View Details">
-                                    <i class="iconoir-eye"></i>
-                                </button>
+                                <div class="d-flex gap-1">
+                                    <button class="btn btn-ghost btn-sm" onclick="viewPayment(<?= $payment['id'] ?>)" title="View Details">
+                                        <i class="iconoir-eye"></i>
+                                    </button>
+                                    <?php if (($payment['status'] ?? '') === 'pending'): ?>
+                                        <button class="btn btn-success btn-sm" onclick="approvePayment(<?= $payment['id'] ?>)" title="Approve Payment">
+                                            <i class="iconoir-check"></i>
+                                        </button>
+                                        <button class="btn btn-danger btn-sm" onclick="rejectPayment(<?= $payment['id'] ?>)" title="Reject Payment">
+                                            <i class="iconoir-xmark"></i>
+                                        </button>
+                                    <?php endif; ?>
+                                </div>
                             </td>
                         </tr>
                     <?php endforeach; ?>
@@ -156,7 +216,7 @@
 
 <!-- Payment Details Modal -->
 <div class="modal-overlay" id="payment-modal">
-    <div class="modal">
+    <div class="modal" style="max-width: 600px;">
         <div class="modal-header">
             <h3 class="modal-title">Payment Details</h3>
             <button class="modal-close" onclick="Modal.close('payment-modal')">&times;</button>
@@ -164,37 +224,211 @@
         <div class="modal-body" id="payment-details">
             <!-- Loaded via JS -->
         </div>
+        <div class="modal-footer" id="payment-actions" style="display: none;">
+            <!-- Actions for pending payments -->
+        </div>
+    </div>
+</div>
+
+<!-- Reject Reason Modal -->
+<div class="modal-overlay" id="reject-modal">
+    <div class="modal" style="max-width: 400px;">
+        <div class="modal-header">
+            <h3 class="modal-title">Reject Payment</h3>
+            <button class="modal-close" onclick="Modal.close('reject-modal')">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p class="text-secondary mb-4">Please provide a reason for rejecting this payment. The user will be notified.</p>
+            <div class="form-group mb-0">
+                <label class="form-label">Reason</label>
+                <textarea id="reject-reason" class="form-input" rows="3" placeholder="e.g., Payment not received, Invalid receipt..."></textarea>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-ghost" onclick="Modal.close('reject-modal')">Cancel</button>
+            <button class="btn btn-danger" id="confirm-reject-btn">Reject Payment</button>
+        </div>
     </div>
 </div>
 
 <script>
-async function viewPayment(reference) {
+let currentPaymentId = null;
+
+async function viewPayment(id) {
+    currentPaymentId = id;
     try {
-        const response = await API.get('/admin/payments/' + reference);
+        const response = await API.get('/admin/payments/' + id);
         const payment = response.data;
 
+        let receiptHtml = '';
+        if (payment.receipt_url) {
+            const isImage = /\.(jpg|jpeg|png|gif|webp)$/i.test(payment.receipt_url);
+            if (isImage) {
+                receiptHtml = `
+                    <div class="mt-4">
+                        <strong>Payment Receipt:</strong>
+                        <a href="${payment.receipt_url}" target="_blank" class="d-block mt-2">
+                            <img src="${payment.receipt_url}" alt="Receipt" style="max-width: 100%; max-height: 300px; border-radius: 8px; border: 1px solid var(--gray-200);">
+                        </a>
+                    </div>
+                `;
+            } else {
+                receiptHtml = `
+                    <div class="mt-4">
+                        <strong>Payment Receipt:</strong>
+                        <a href="${payment.receipt_url}" target="_blank" class="btn btn-outline btn-sm mt-2">
+                            <i class="iconoir-download"></i> Download Receipt
+                        </a>
+                    </div>
+                `;
+            }
+        }
+
         document.getElementById('payment-details').innerHTML = `
-            <div class="mb-4">
-                <strong>Reference:</strong>
-                <code>${payment.reference || ''}</code>
+            <div class="mb-4 p-3" style="background: var(--gray-50); border-radius: 8px;">
+                <div class="text-sm text-secondary mb-1">Reference</div>
+                <code style="font-size: 14px;">${payment.reference || ''}</code>
             </div>
             <div class="grid grid-cols-2 gap-4">
-                <div><strong>User:</strong> ${payment.user_name || ''}</div>
-                <div><strong>Email:</strong> ${payment.user_email || ''}</div>
-                <div><strong>Plan:</strong> ${payment.plan || ''}</div>
-                <div><strong>Amount:</strong> ₦${(payment.amount || 0).toLocaleString()}</div>
-                <div><strong>Method:</strong> ${payment.payment_method || ''}</div>
-                <div><strong>Status:</strong> ${payment.status || ''}</div>
-                <div><strong>Date:</strong> ${payment.created_at || ''}</div>
-                <div><strong>Gateway Ref:</strong> ${payment.gateway_reference || 'N/A'}</div>
+                <div>
+                    <div class="text-sm text-secondary mb-1">User</div>
+                    <div class="font-medium">${payment.first_name || ''} ${payment.last_name || ''}</div>
+                </div>
+                <div>
+                    <div class="text-sm text-secondary mb-1">Email</div>
+                    <div>${payment.email || ''}</div>
+                </div>
+                <div>
+                    <div class="text-sm text-secondary mb-1">Plan</div>
+                    <div class="font-medium">${payment.plan_name || 'N/A'}</div>
+                </div>
+                <div>
+                    <div class="text-sm text-secondary mb-1">Amount</div>
+                    <div class="font-bold text-lg">${formatCurrency(payment.amount || 0)}</div>
+                </div>
+                <div>
+                    <div class="text-sm text-secondary mb-1">Method</div>
+                    <div>${formatPaymentMethod(payment.payment_method)}</div>
+                </div>
+                <div>
+                    <div class="text-sm text-secondary mb-1">Status</div>
+                    <div><span class="badge ${getStatusBadge(payment.status)}">${(payment.status || 'pending').toUpperCase()}</span></div>
+                </div>
+                <div>
+                    <div class="text-sm text-secondary mb-1">Created</div>
+                    <div>${payment.created_at || ''}</div>
+                </div>
+                <div>
+                    <div class="text-sm text-secondary mb-1">Paid At</div>
+                    <div>${payment.paid_at || 'Not yet'}</div>
+                </div>
             </div>
-            ${payment.metadata ? `<div class="mt-4"><strong>Metadata:</strong><pre style="background: var(--gray-100); padding: 12px; border-radius: var(--radius); font-size: 12px; overflow: auto;">${JSON.stringify(payment.metadata, null, 2)}</pre></div>` : ''}
+            ${receiptHtml}
         `;
+
+        // Show actions for pending payments
+        const actionsDiv = document.getElementById('payment-actions');
+        if (payment.status === 'pending') {
+            actionsDiv.style.display = 'flex';
+            actionsDiv.innerHTML = `
+                <button class="btn btn-ghost" onclick="Modal.close('payment-modal')">Close</button>
+                <div class="d-flex gap-2">
+                    <button class="btn btn-danger" onclick="Modal.close('payment-modal'); rejectPayment(${id})">
+                        <i class="iconoir-xmark"></i> Reject
+                    </button>
+                    <button class="btn btn-success" onclick="approvePayment(${id})">
+                        <i class="iconoir-check"></i> Approve
+                    </button>
+                </div>
+            `;
+        } else {
+            actionsDiv.style.display = 'none';
+        }
 
         Modal.open('payment-modal');
     } catch (error) {
         Toast.error('Failed to load payment details');
     }
+}
+
+async function approvePayment(id) {
+    if (!confirm('Are you sure you want to approve this payment? This will activate the user\'s subscription.')) {
+        return;
+    }
+
+    try {
+        const response = await API.put('/admin/payments/' + id + '/approve');
+        if (response.success) {
+            Toast.success('Payment approved! User subscription activated.');
+            // Update the row
+            const row = document.querySelector(`tr[data-payment-id="${id}"]`);
+            if (row) {
+                row.querySelector('.badge-warning')?.classList.replace('badge-warning', 'badge-success');
+                row.querySelector('.badge-warning')?.textContent = 'COMPLETED';
+                row.querySelector('.btn-success')?.remove();
+                row.querySelector('.btn-danger')?.remove();
+            }
+            Modal.close('payment-modal');
+            // Optionally reload
+            setTimeout(() => window.location.reload(), 1000);
+        }
+    } catch (error) {
+        Toast.error(error.message || 'Failed to approve payment');
+    }
+}
+
+function rejectPayment(id) {
+    currentPaymentId = id;
+    document.getElementById('reject-reason').value = '';
+    Modal.open('reject-modal');
+}
+
+document.getElementById('confirm-reject-btn').addEventListener('click', async function() {
+    const reason = document.getElementById('reject-reason').value.trim();
+    if (!reason) {
+        Toast.error('Please provide a rejection reason');
+        return;
+    }
+
+    this.disabled = true;
+    this.innerHTML = '<span class="loading-spinner" style="width:16px;height:16px;border-width:2px;"></span> Rejecting...';
+
+    try {
+        const response = await API.put('/admin/payments/' + currentPaymentId + '/reject', { reason });
+        if (response.success) {
+            Toast.success('Payment rejected. User has been notified.');
+            Modal.close('reject-modal');
+            setTimeout(() => window.location.reload(), 1000);
+        }
+    } catch (error) {
+        Toast.error(error.message || 'Failed to reject payment');
+    } finally {
+        this.disabled = false;
+        this.innerHTML = 'Reject Payment';
+    }
+});
+
+function formatCurrency(amount) {
+    return new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN' }).format(amount);
+}
+
+function formatPaymentMethod(method) {
+    const methods = {
+        'bank_transfer': 'Bank Transfer',
+        'paystack': 'Paystack',
+        'xpress': 'Xpress'
+    };
+    return methods[method] || method;
+}
+
+function getStatusBadge(status) {
+    const badges = {
+        'completed': 'badge-success',
+        'success': 'badge-success',
+        'pending': 'badge-warning',
+        'failed': 'badge-danger'
+    };
+    return badges[status] || 'badge-secondary';
 }
 
 function exportPayments() {
@@ -234,10 +468,57 @@ function exportPayments() {
     border-top: 1px solid var(--gray-100);
 }
 
+.modal-footer {
+    display: flex;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-top: 1px solid var(--gray-100);
+}
+
 code {
     background: var(--gray-100);
     padding: 2px 6px;
     border-radius: 4px;
     font-family: monospace;
+}
+
+.btn-success {
+    background: var(--success);
+    color: white;
+}
+
+.btn-success:hover {
+    background: #059669;
+}
+
+.btn-danger {
+    background: var(--danger);
+    color: white;
+}
+
+.btn-danger:hover {
+    background: #DC2626;
+}
+
+.badge-info {
+    background: #DBEAFE;
+    color: #1E40AF;
+}
+
+.badge-purple {
+    background: #EDE9FE;
+    color: #6D28D9;
+}
+
+.loading-spinner {
+    display: inline-block;
+    border: 2px solid transparent;
+    border-top-color: currentColor;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
 }
 </style>
