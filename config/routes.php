@@ -1477,17 +1477,54 @@ $router->group(['middleware' => 'auth'], function ($router) {
             WHERE aa.user_id = ? AND aa.status = 'active'
         ", [$userId]);
 
-        $partner = $assignment ? [
-            'id' => $assignment['partner_user_id'],
-            'first_name' => $assignment['first_name'],
-            'last_name' => $assignment['last_name'],
-            'avatar' => $assignment['avatar'],
-            'email' => $assignment['email']
-        ] : null;
-
-        // Get conversations
+        $partner = null;
+        $stats = null;
         $conversations = [];
-        if ($partner) {
+
+        if ($assignment) {
+            $partner = [
+                'id' => $assignment['partner_user_id'],
+                'first_name' => $assignment['first_name'],
+                'last_name' => $assignment['last_name'],
+                'avatar' => $assignment['avatar'],
+                'email' => $assignment['email'],
+                'paired_at' => $assignment['assigned_at']
+            ];
+
+            $partnerId = $assignment['partner_user_id'];
+
+            // Calculate stats
+            $assignedAt = new DateTime($assignment['assigned_at']);
+            $now = new DateTime();
+            $daysTogether = $assignedAt->diff($now)->days;
+
+            // Get conversation and message count
+            $conversation = \Core\Database::queryOne("
+                SELECT id FROM conversations
+                WHERE (participant_1 = ? AND participant_2 = ?) OR (participant_1 = ? AND participant_2 = ?)
+            ", [$userId, $partnerId, $partnerId, $userId]);
+
+            $messagesCount = 0;
+            if ($conversation) {
+                $messagesCount = (int) \Core\Database::scalar("
+                    SELECT COUNT(*) FROM messages WHERE conversation_id = ? AND sender_id = ?
+                ", [$conversation['id'], $userId]);
+            }
+
+            // Count goal checkins since partnership started
+            $checkinsCount = (int) \Core\Database::scalar("
+                SELECT COUNT(*) FROM goal_checkins gc
+                JOIN goals g ON gc.goal_id = g.id
+                WHERE g.user_id = ? AND gc.created_at >= ?
+            ", [$userId, $assignment['assigned_at']]);
+
+            $stats = [
+                'days_together' => $daysTogether,
+                'messages_sent' => $messagesCount,
+                'checkins' => $checkinsCount
+            ];
+
+            // Get conversations
             $conversations = \Core\Database::query("
                 SELECT c.*, m.content as last_message, m.created_at as last_message_at
                 FROM conversations c
@@ -1500,6 +1537,7 @@ $router->group(['middleware' => 'auth'], function ($router) {
         View::render('accountability/index', [
             'title' => 'Accountability Partner',
             'partner' => $partner,
+            'stats' => $stats,
             'conversations' => $conversations
         ]);
     });
@@ -1603,6 +1641,111 @@ $router->group(['middleware' => 'auth'], function ($router) {
         ", [$conversationId]);
 
         View::json(['success' => true, 'message' => 'Message sent']);
+    });
+
+    // Send nudge to partner
+    $router->post('/accountability/nudge', function () {
+        global $auth;
+        $userId = $auth->user()['id'] ?? 0;
+
+        if (!$auth->isSubscribed()) {
+            View::json(['success' => false, 'message' => 'Subscription required']);
+            return;
+        }
+
+        $data = json_decode(file_get_contents('php://input'), true);
+        $message = $data['message'] ?? '';
+
+        if (empty($message)) {
+            View::json(['success' => false, 'message' => 'Message is required']);
+            return;
+        }
+
+        // Get partner
+        $assignment = \Core\Database::queryOne("
+            SELECT partner_id FROM accountability_assignments WHERE user_id = ? AND status = 'active'
+        ", [$userId]);
+
+        if (!$assignment) {
+            View::json(['success' => false, 'message' => 'No accountability partner assigned']);
+            return;
+        }
+
+        $partnerId = $assignment['partner_id'];
+
+        // Get or create conversation
+        $conversation = \Core\Database::queryOne("
+            SELECT id FROM conversations
+            WHERE (participant_1 = ? AND participant_2 = ?) OR (participant_1 = ? AND participant_2 = ?)
+        ", [$userId, $partnerId, $partnerId, $userId]);
+
+        if (!$conversation) {
+            \Core\Database::execute("
+                INSERT INTO conversations (participant_1, participant_2, created_at)
+                VALUES (?, ?, NOW())
+            ", [$userId, $partnerId]);
+            $conversationId = \Core\Database::lastInsertId();
+        } else {
+            $conversationId = $conversation['id'];
+        }
+
+        // Insert nudge message
+        \Core\Database::execute("
+            INSERT INTO messages (conversation_id, sender_id, content, created_at)
+            VALUES (?, ?, ?, NOW())
+        ", [$conversationId, $userId, $message]);
+
+        // Update conversation last_message_at
+        \Core\Database::execute("
+            UPDATE conversations SET last_message_at = NOW() WHERE id = ?
+        ", [$conversationId]);
+
+        View::json(['success' => true, 'message' => 'Nudge sent']);
+    });
+
+    // End partnership
+    $router->post('/accountability/unpair', function () {
+        global $auth;
+        $userId = $auth->user()['id'] ?? 0;
+
+        if (!$auth->isSubscribed()) {
+            View::json(['success' => false, 'message' => 'Subscription required']);
+            return;
+        }
+
+        // Get current assignment
+        $assignment = \Core\Database::queryOne("
+            SELECT id, partner_id FROM accountability_assignments WHERE user_id = ? AND status = 'active'
+        ", [$userId]);
+
+        if (!$assignment) {
+            View::json(['success' => false, 'message' => 'No active partnership found']);
+            return;
+        }
+
+        // Deactivate assignment
+        \Core\Database::execute("
+            UPDATE accountability_assignments SET status = 'inactive' WHERE id = ?
+        ", [$assignment['id']]);
+
+        // Notify admins
+        $user = $auth->user();
+        $userName = ($user['first_name'] ?? '') . ' ' . ($user['last_name'] ?? '');
+
+        $admins = \Core\Database::query("SELECT id FROM users WHERE role = 'admin' AND status = 'active'");
+        foreach ($admins as $admin) {
+            \Core\Database::execute("
+                INSERT INTO notifications (user_id, title, body, type, data, created_at)
+                VALUES (?, ?, ?, 'accountability', ?, NOW())
+            ", [
+                $admin['id'],
+                'Partnership Ended',
+                "User {$userName} has ended their accountability partnership.",
+                json_encode(['user_id' => $userId, 'assignment_id' => $assignment['id']])
+            ]);
+        }
+
+        View::json(['success' => true, 'message' => 'Partnership ended']);
     });
 });
 

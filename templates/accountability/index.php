@@ -26,16 +26,16 @@
                     <!-- Partner Stats -->
                     <div class="grid grid-cols-3 gap-4 mt-6">
                         <div class="text-center p-4" style="background: var(--gray-50); border-radius: var(--radius);">
-                            <div class="text-2xl font-bold text-primary"><?= $partner['streak'] ?? 0 ?></div>
-                            <div class="text-sm text-secondary">Day Streak</div>
+                            <div class="text-2xl font-bold text-primary"><?= $stats['days_together'] ?? 0 ?></div>
+                            <div class="text-sm text-secondary">Days Together</div>
                         </div>
                         <div class="text-center p-4" style="background: var(--gray-50); border-radius: var(--radius);">
-                            <div class="text-2xl font-bold text-success"><?= $partner['courses_completed'] ?? 0 ?></div>
-                            <div class="text-sm text-secondary">Courses Done</div>
+                            <div class="text-2xl font-bold text-success"><?= $stats['messages_sent'] ?? 0 ?></div>
+                            <div class="text-sm text-secondary">Messages Sent</div>
                         </div>
                         <div class="text-center p-4" style="background: var(--gray-50); border-radius: var(--radius);">
-                            <div class="text-2xl font-bold text-warning"><?= $partner['xp'] ?? 0 ?></div>
-                            <div class="text-sm text-secondary">XP Earned</div>
+                            <div class="text-2xl font-bold text-warning"><?= $stats['checkins'] ?? 0 ?></div>
+                            <div class="text-sm text-secondary">Check-ins</div>
                         </div>
                     </div>
                 </div>
@@ -90,7 +90,7 @@
                 </div>
             </div>
         <?php else: ?>
-            <!-- No Partner - Find One -->
+            <!-- No Partner - Awaiting Assignment -->
             <div class="card">
                 <div class="card-body text-center py-8">
                     <div class="avatar avatar-xl mb-4" style="margin: 0 auto; background: var(--gradient);">
@@ -100,10 +100,14 @@
                     <p class="text-secondary mb-6" style="max-width: 400px; margin: 0 auto;">
                         Stay motivated and achieve your goals faster by partnering with someone who shares your learning journey.
                     </p>
-                    <button class="btn btn-primary btn-lg" onclick="findPartner()">
-                        <i class="iconoir-search"></i>
-                        Find a Partner
-                    </button>
+                    <div class="btn btn-primary btn-lg" style="cursor: default; opacity: 0.8;">
+                        <i class="iconoir-clock"></i>
+                        Awaiting Partner Assignment
+                    </div>
+                    <p class="text-sm text-secondary mt-4">
+                        Our team will assign you a dedicated accountability partner soon.<br>
+                        You'll receive a notification when matched.
+                    </p>
                 </div>
             </div>
 
@@ -228,18 +232,6 @@
 </div>
 
 <script>
-async function findPartner() {
-    try {
-        const response = await API.post('/accountability/find-partner');
-        if (response.success) {
-            Toast.success('Finding you a partner...');
-            setTimeout(() => location.reload(), 2000);
-        }
-    } catch (error) {
-        Toast.error(error.message || 'Failed to find partner');
-    }
-}
-
 async function sendNudge(message) {
     try {
         const response = await API.post('/accountability/nudge', { message });
