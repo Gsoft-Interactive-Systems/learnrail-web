@@ -24,6 +24,7 @@ class View
         $data['isAuthenticated'] = $auth ? $auth->check() : false;
         $data['isAdmin'] = $auth ? $auth->isAdmin() : false;
         $data['isSubscribed'] = $auth ? $auth->isSubscribed() : false;
+        $data['subscription'] = $auth ? $auth->getSubscription() : null;
         $data['csrfToken'] = csrf_token();
 
         // Flash messages

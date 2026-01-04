@@ -2800,8 +2800,8 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
         // Create in-app notification for user
         try {
             \Core\Database::execute("
-                INSERT INTO notifications (user_id, title, message, type, data, created_at)
-                VALUES (?, ?, ?, ?, ?, NOW())
+                INSERT INTO notifications (user_id, title, message, type, data, is_read, created_at)
+                VALUES (?, ?, ?, ?, ?, 0, NOW())
             ", [
                 $payment['user_id'],
                 'Payment Approved!',
@@ -2810,7 +2810,7 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
                 json_encode(['payment_id' => $id, 'end_date' => $endDate])
             ]);
         } catch (\Exception $e) {
-            // Notification table might not exist, continue anyway
+            error_log('Failed to create notification: ' . $e->getMessage());
         }
 
         View::json(['success' => true, 'message' => 'Payment approved and subscription activated']);
@@ -2818,7 +2818,6 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
 
     // Legacy POST route for backward compatibility
     $router->post('/payments/{id}/approve', function ($id) {
-        // Redirect to PUT handler
         $payment = \Core\Database::queryOne("
             SELECT p.*, u.first_name, u.email
             FROM payments p
@@ -2836,20 +2835,43 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
             return;
         }
 
+        // Update payment status
         \Core\Database::execute("UPDATE payments SET status = 'completed', paid_at = NOW() WHERE id = ?", [$id]);
 
+        // Activate subscription if exists
+        $endDate = null;
+        $planName = 'N/A';
         if ($payment['subscription_id']) {
             $subscription = \Core\Database::queryOne("SELECT * FROM subscriptions WHERE id = ?", [$payment['subscription_id']]);
             if ($subscription) {
                 $plan = \Core\Database::queryOne("SELECT * FROM subscription_plans WHERE id = ?", [$subscription['plan_id']]);
                 $durationDays = $plan['duration_days'] ?? 30;
+                $planName = $plan['name'] ?? 'Premium';
+                $endDate = date('Y-m-d', strtotime("+{$durationDays} days"));
+
                 \Core\Database::execute("
                     UPDATE subscriptions SET status = 'active', start_date = CURDATE(), end_date = DATE_ADD(CURDATE(), INTERVAL ? DAY), updated_at = NOW() WHERE id = ?
                 ", [$durationDays, $payment['subscription_id']]);
             }
         }
 
-        View::json(['success' => true, 'message' => 'Payment approved']);
+        // Create in-app notification for user
+        try {
+            \Core\Database::execute("
+                INSERT INTO notifications (user_id, title, message, type, data, is_read, created_at)
+                VALUES (?, ?, ?, ?, ?, 0, NOW())
+            ", [
+                $payment['user_id'],
+                'Payment Approved!',
+                'Your payment has been verified and your ' . $planName . ' subscription is now active until ' . ($endDate ?? 'N/A') . '.',
+                'payment',
+                json_encode(['payment_id' => $id, 'end_date' => $endDate, 'plan' => $planName])
+            ]);
+        } catch (\Exception $e) {
+            error_log('Failed to create notification: ' . $e->getMessage());
+        }
+
+        View::json(['success' => true, 'message' => 'Payment approved and subscription activated']);
     });
 
     // Reject payment
@@ -2890,8 +2912,8 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
         // Create in-app notification for user
         try {
             \Core\Database::execute("
-                INSERT INTO notifications (user_id, title, message, type, data, created_at)
-                VALUES (?, ?, ?, ?, ?, NOW())
+                INSERT INTO notifications (user_id, title, message, type, data, is_read, created_at)
+                VALUES (?, ?, ?, ?, ?, 0, NOW())
             ", [
                 $payment['user_id'],
                 'Payment Issue',
@@ -2900,7 +2922,7 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
                 json_encode(['payment_id' => $id, 'reason' => $reason])
             ]);
         } catch (\Exception $e) {
-            // Notification table might not exist, continue anyway
+            error_log('Failed to create notification: ' . $e->getMessage());
         }
 
         View::json(['success' => true, 'message' => 'Payment rejected']);
@@ -2938,8 +2960,8 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
 
         try {
             \Core\Database::execute("
-                INSERT INTO notifications (user_id, title, message, type, data, created_at)
-                VALUES (?, ?, ?, ?, ?, NOW())
+                INSERT INTO notifications (user_id, title, message, type, data, is_read, created_at)
+                VALUES (?, ?, ?, ?, ?, 0, NOW())
             ", [
                 $payment['user_id'],
                 'Payment Issue',
@@ -2947,7 +2969,9 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
                 'payment',
                 json_encode(['payment_id' => $id, 'reason' => $reason])
             ]);
-        } catch (\Exception $e) {}
+        } catch (\Exception $e) {
+            error_log('Failed to create notification: ' . $e->getMessage());
+        }
 
         View::json(['success' => true, 'message' => 'Payment rejected']);
     });

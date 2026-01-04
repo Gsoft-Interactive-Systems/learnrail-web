@@ -210,12 +210,62 @@ class Auth
             return false;
         }
 
+        // First check API response for subscription
         $subscription = $this->user['subscription'] ?? $this->user['active_subscription'] ?? null;
-        if (!$subscription) {
-            return false;
+        if ($subscription && ($subscription['status'] ?? '') === 'active') {
+            return true;
         }
 
-        return ($subscription['status'] ?? '') === 'active';
+        // Also check local database for active subscription (web app payments)
+        $userId = $this->user['id'] ?? null;
+        if ($userId) {
+            $localSubscription = Database::queryOne("
+                SELECT * FROM subscriptions
+                WHERE user_id = ? AND status = 'active' AND end_date >= CURDATE()
+                LIMIT 1
+            ", [$userId]);
+
+            if ($localSubscription) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Get user's active subscription details
+     */
+    public function getSubscription(): ?array
+    {
+        if (!$this->user) {
+            return null;
+        }
+
+        // Check API response first
+        $subscription = $this->user['subscription'] ?? $this->user['active_subscription'] ?? null;
+        if ($subscription && ($subscription['status'] ?? '') === 'active') {
+            return $subscription;
+        }
+
+        // Check local database
+        $userId = $this->user['id'] ?? null;
+        if ($userId) {
+            $localSubscription = Database::queryOne("
+                SELECT s.*, sp.name as plan_name, sp.features
+                FROM subscriptions s
+                LEFT JOIN subscription_plans sp ON s.plan_id = sp.id
+                WHERE s.user_id = ? AND s.status = 'active' AND s.end_date >= CURDATE()
+                ORDER BY s.end_date DESC
+                LIMIT 1
+            ", [$userId]);
+
+            if ($localSubscription) {
+                return $localSubscription;
+            }
+        }
+
+        return null;
     }
 
     public function getToken(): ?string
