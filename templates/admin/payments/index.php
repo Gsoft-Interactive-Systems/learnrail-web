@@ -4,9 +4,7 @@
         <p class="text-secondary">View and manage payment transactions</p>
     </div>
     <div class="d-flex gap-2">
-        <!-- Debug test button -->
-        <button class="btn btn-warning btn-sm" onclick="alert('JavaScript onclick works!')">Test JS</button>
-        <button class="btn btn-outline" onclick="exportPayments()">
+        <button class="btn btn-outline" data-action="export">
             <i class="iconoir-download"></i>
             Export CSV
         </button>
@@ -174,14 +172,14 @@ if (count($pendingBankTransfers) > 0):
                             </td>
                             <td>
                                 <div class="d-flex gap-2">
-                                    <button class="btn btn-outline btn-sm" onclick="viewPayment(<?= $payment['id'] ?>)" title="View Details">
+                                    <button class="btn btn-outline btn-sm" data-action="view" data-payment-id="<?= (int)$payment['id'] ?>" title="View Details">
                                         <i class="iconoir-eye"></i> View
                                     </button>
                                     <?php if (($payment['status'] ?? '') === 'pending'): ?>
-                                        <button class="btn btn-success btn-sm" onclick="approvePayment(<?= $payment['id'] ?>)" title="Approve Payment">
+                                        <button class="btn btn-success btn-sm" data-action="approve" data-payment-id="<?= (int)$payment['id'] ?>" title="Approve Payment">
                                             <i class="iconoir-check"></i> Approve
                                         </button>
-                                        <button class="btn btn-outline-danger btn-sm" onclick="rejectPayment(<?= $payment['id'] ?>)" title="Reject Payment">
+                                        <button class="btn btn-outline-danger btn-sm" data-action="reject" data-payment-id="<?= (int)$payment['id'] ?>" title="Reject Payment">
                                             <i class="iconoir-xmark"></i> Reject
                                         </button>
                                     <?php endif; ?>
@@ -256,247 +254,274 @@ if (count($pendingBankTransfers) > 0):
 </div>
 
 <script>
-// Debug: Script is loading
-console.log('=== PAYMENTS ADMIN SCRIPT LOADING ===');
-console.log('API defined?', typeof API !== 'undefined');
-console.log('Modal defined?', typeof Modal !== 'undefined');
-console.log('Toast defined?', typeof Toast !== 'undefined');
+// Initialize payment management functionality
+(function() {
+    'use strict';
 
-// Wait for dependencies to be available
-document.addEventListener('DOMContentLoaded', function() {
-    console.log('=== DOMContentLoaded fired ===');
-    console.log('API now defined?', typeof API !== 'undefined');
-    console.log('Modal now defined?', typeof Modal !== 'undefined');
+    let currentPaymentId = null;
 
-    // Ensure API is available (might be defined after this script)
-    if (typeof API === 'undefined') {
-        console.error('API not loaded - buttons will not work');
-        return;
+    // Wait for all dependencies to be ready
+    function initPaymentAdmin() {
+        // Check if dependencies are loaded
+        if (typeof API === 'undefined' || typeof Modal === 'undefined' || typeof Toast === 'undefined') {
+            console.error('Payment admin: Dependencies not loaded');
+            return false;
+        }
+
+        // Set up reject button handler
+        const rejectBtn = document.getElementById('confirm-reject-btn');
+        if (rejectBtn) {
+            rejectBtn.onclick = handleRejectConfirm;
+        }
+
+        // Set up event delegation for payment buttons
+        document.addEventListener('click', function(e) {
+            const target = e.target.closest('[data-action]');
+            if (!target) return;
+
+            const action = target.dataset.action;
+            const paymentId = target.dataset.paymentId;
+
+            e.preventDefault();
+
+            if (action === 'view' && paymentId) {
+                viewPayment(parseInt(paymentId, 10));
+            } else if (action === 'approve' && paymentId) {
+                approvePayment(parseInt(paymentId, 10));
+            } else if (action === 'reject' && paymentId) {
+                rejectPayment(parseInt(paymentId, 10));
+            } else if (action === 'export') {
+                exportPayments();
+            }
+        });
+
+        console.log('Payment admin initialized successfully');
+        return true;
     }
-});
 
-let currentPaymentId = null;
+    async function viewPayment(id) {
+        if (!id) {
+            Toast.error('Invalid payment ID');
+            return;
+        }
 
-async function viewPayment(id) {
-    console.log('viewPayment called with id:', id);
-    if (typeof API === 'undefined') {
-        alert('Error: Page not fully loaded. Please refresh.');
-        return;
-    }
-    currentPaymentId = id;
-    try {
-        const response = await API.get('/admin/payments/' + id);
-        const payment = response.data;
+        currentPaymentId = id;
 
-        let receiptHtml = '';
-        if (payment.receipt_url) {
-            const isImage = /\.(jpg|jpeg|png|gif|webp)$/i.test(payment.receipt_url);
-            if (isImage) {
-                receiptHtml = `
-                    <div class="mt-4">
-                        <strong>Payment Receipt:</strong>
-                        <a href="${payment.receipt_url}" target="_blank" class="d-block mt-2">
-                            <img src="${payment.receipt_url}" alt="Receipt" style="max-width: 100%; max-height: 300px; border-radius: 8px; border: 1px solid var(--gray-200);">
-                        </a>
+        try {
+            const response = await API.get('/admin/payments/' + id);
+            const payment = response.data;
+
+            let receiptHtml = '';
+            if (payment.receipt_url) {
+                const isImage = /\.(jpg|jpeg|png|gif|webp)$/i.test(payment.receipt_url);
+                if (isImage) {
+                    receiptHtml = `
+                        <div class="mt-4">
+                            <strong>Payment Receipt:</strong>
+                            <a href="${escapeHtml(payment.receipt_url)}" target="_blank" class="d-block mt-2">
+                                <img src="${escapeHtml(payment.receipt_url)}" alt="Receipt" style="max-width: 100%; max-height: 300px; border-radius: 8px; border: 1px solid var(--gray-200);">
+                            </a>
+                        </div>
+                    `;
+                } else {
+                    receiptHtml = `
+                        <div class="mt-4">
+                            <strong>Payment Receipt:</strong>
+                            <a href="${escapeHtml(payment.receipt_url)}" target="_blank" class="btn btn-outline btn-sm mt-2">
+                                <i class="iconoir-download"></i> Download Receipt
+                            </a>
+                        </div>
+                    `;
+                }
+            }
+
+            document.getElementById('payment-details').innerHTML = `
+                <div class="mb-4 p-3" style="background: var(--gray-50); border-radius: 8px;">
+                    <div class="text-sm text-secondary mb-1">Reference</div>
+                    <code style="font-size: 14px;">${escapeHtml(payment.reference || '')}</code>
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <div class="text-sm text-secondary mb-1">User</div>
+                        <div class="font-medium">${escapeHtml(payment.first_name || '')} ${escapeHtml(payment.last_name || '')}</div>
+                    </div>
+                    <div>
+                        <div class="text-sm text-secondary mb-1">Email</div>
+                        <div>${escapeHtml(payment.email || '')}</div>
+                    </div>
+                    <div>
+                        <div class="text-sm text-secondary mb-1">Plan</div>
+                        <div class="font-medium">${escapeHtml(payment.plan_name || 'N/A')}</div>
+                    </div>
+                    <div>
+                        <div class="text-sm text-secondary mb-1">Amount</div>
+                        <div class="font-bold text-lg">${formatCurrency(payment.amount || 0)}</div>
+                    </div>
+                    <div>
+                        <div class="text-sm text-secondary mb-1">Method</div>
+                        <div>${formatPaymentMethod(payment.payment_method)}</div>
+                    </div>
+                    <div>
+                        <div class="text-sm text-secondary mb-1">Status</div>
+                        <div><span class="badge ${getStatusBadge(payment.status)}">${escapeHtml((payment.status || 'pending').toUpperCase())}</span></div>
+                    </div>
+                    <div>
+                        <div class="text-sm text-secondary mb-1">Created</div>
+                        <div>${escapeHtml(payment.created_at || '')}</div>
+                    </div>
+                    <div>
+                        <div class="text-sm text-secondary mb-1">Paid At</div>
+                        <div>${escapeHtml(payment.paid_at || 'Not yet')}</div>
+                    </div>
+                </div>
+                ${receiptHtml}
+            `;
+
+            // Show actions for pending payments
+            const actionsDiv = document.getElementById('payment-actions');
+            if (payment.status === 'pending') {
+                actionsDiv.style.display = 'flex';
+                actionsDiv.innerHTML = `
+                    <button class="btn btn-ghost" onclick="Modal.close('payment-modal')">Close</button>
+                    <div class="d-flex gap-2">
+                        <button class="btn btn-danger" data-action="reject" data-payment-id="${id}">
+                            <i class="iconoir-xmark"></i> Reject
+                        </button>
+                        <button class="btn btn-success" data-action="approve" data-payment-id="${id}">
+                            <i class="iconoir-check"></i> Approve
+                        </button>
                     </div>
                 `;
             } else {
-                receiptHtml = `
-                    <div class="mt-4">
-                        <strong>Payment Receipt:</strong>
-                        <a href="${payment.receipt_url}" target="_blank" class="btn btn-outline btn-sm mt-2">
-                            <i class="iconoir-download"></i> Download Receipt
-                        </a>
-                    </div>
-                `;
+                actionsDiv.style.display = 'none';
             }
+
+            Modal.open('payment-modal');
+        } catch (error) {
+            console.error('Failed to load payment:', error);
+            Toast.error(error.message || 'Failed to load payment details');
+        }
+    }
+
+    async function approvePayment(id) {
+        if (!id) {
+            Toast.error('Invalid payment ID');
+            return;
         }
 
-        document.getElementById('payment-details').innerHTML = `
-            <div class="mb-4 p-3" style="background: var(--gray-50); border-radius: 8px;">
-                <div class="text-sm text-secondary mb-1">Reference</div>
-                <code style="font-size: 14px;">${payment.reference || ''}</code>
-            </div>
-            <div class="grid grid-cols-2 gap-4">
-                <div>
-                    <div class="text-sm text-secondary mb-1">User</div>
-                    <div class="font-medium">${payment.first_name || ''} ${payment.last_name || ''}</div>
-                </div>
-                <div>
-                    <div class="text-sm text-secondary mb-1">Email</div>
-                    <div>${payment.email || ''}</div>
-                </div>
-                <div>
-                    <div class="text-sm text-secondary mb-1">Plan</div>
-                    <div class="font-medium">${payment.plan_name || 'N/A'}</div>
-                </div>
-                <div>
-                    <div class="text-sm text-secondary mb-1">Amount</div>
-                    <div class="font-bold text-lg">${formatCurrency(payment.amount || 0)}</div>
-                </div>
-                <div>
-                    <div class="text-sm text-secondary mb-1">Method</div>
-                    <div>${formatPaymentMethod(payment.payment_method)}</div>
-                </div>
-                <div>
-                    <div class="text-sm text-secondary mb-1">Status</div>
-                    <div><span class="badge ${getStatusBadge(payment.status)}">${(payment.status || 'pending').toUpperCase()}</span></div>
-                </div>
-                <div>
-                    <div class="text-sm text-secondary mb-1">Created</div>
-                    <div>${payment.created_at || ''}</div>
-                </div>
-                <div>
-                    <div class="text-sm text-secondary mb-1">Paid At</div>
-                    <div>${payment.paid_at || 'Not yet'}</div>
-                </div>
-            </div>
-            ${receiptHtml}
-        `;
-
-        // Show actions for pending payments
-        const actionsDiv = document.getElementById('payment-actions');
-        if (payment.status === 'pending') {
-            actionsDiv.style.display = 'flex';
-            actionsDiv.innerHTML = `
-                <button class="btn btn-ghost" onclick="Modal.close('payment-modal')">Close</button>
-                <div class="d-flex gap-2">
-                    <button class="btn btn-danger" onclick="Modal.close('payment-modal'); rejectPayment(${id})">
-                        <i class="iconoir-xmark"></i> Reject
-                    </button>
-                    <button class="btn btn-success" onclick="approvePayment(${id})">
-                        <i class="iconoir-check"></i> Approve
-                    </button>
-                </div>
-            `;
-        } else {
-            actionsDiv.style.display = 'none';
+        if (!confirm('Are you sure you want to approve this payment? This will activate the user\'s subscription.')) {
+            return;
         }
 
-        Modal.open('payment-modal');
-    } catch (error) {
-        Toast.error('Failed to load payment details');
-    }
-}
-
-async function approvePayment(id) {
-    console.log('approvePayment called with id:', id);
-    if (typeof API === 'undefined') {
-        alert('Error: Page not fully loaded. Please refresh.');
-        return;
-    }
-    if (!confirm('Are you sure you want to approve this payment? This will activate the user\'s subscription.')) {
-        return;
-    }
-
-    try {
-        const response = await API.post('/admin/payments/' + id + '/approve');
-        if (response.success) {
-            Toast.success('Payment approved! User subscription activated.');
-            // Update the row
-            const row = document.querySelector(`tr[data-payment-id="${id}"]`);
-            if (row) {
-                row.querySelector('.badge-warning')?.classList.replace('badge-warning', 'badge-success');
-                row.querySelector('.badge-warning')?.textContent = 'COMPLETED';
-                row.querySelector('.btn-success')?.remove();
-                row.querySelector('.btn-danger')?.remove();
+        try {
+            const response = await API.post('/admin/payments/' + id + '/approve');
+            if (response.success) {
+                Toast.success('Payment approved! User subscription activated.');
+                Modal.close('payment-modal');
+                setTimeout(() => window.location.reload(), 1000);
+            } else {
+                Toast.error(response.message || 'Failed to approve payment');
             }
-            Modal.close('payment-modal');
-            // Optionally reload
-            setTimeout(() => window.location.reload(), 1000);
+        } catch (error) {
+            console.error('Failed to approve payment:', error);
+            Toast.error(error.message || 'Failed to approve payment');
         }
-    } catch (error) {
-        Toast.error(error.message || 'Failed to approve payment');
-    }
-}
-
-function rejectPayment(id) {
-    console.log('rejectPayment called with id:', id);
-    if (typeof Modal === 'undefined') {
-        alert('Error: Page not fully loaded. Please refresh.');
-        return;
-    }
-    currentPaymentId = id;
-    document.getElementById('reject-reason').value = '';
-    Modal.open('reject-modal');
-}
-
-// Wait for DOM before adding event listener
-document.addEventListener('DOMContentLoaded', function() {
-    const rejectBtn = document.getElementById('confirm-reject-btn');
-    if (rejectBtn) {
-        rejectBtn.addEventListener('click', handleRejectConfirm);
-    }
-});
-
-async function handleRejectConfirm() {
-    const reason = document.getElementById('reject-reason').value.trim();
-    if (!reason) {
-        Toast.error('Please provide a rejection reason');
-        return;
     }
 
-    const btn = document.getElementById('confirm-reject-btn');
-    if (btn) {
-        btn.disabled = true;
-        btn.innerHTML = '<span class="loading-spinner" style="width:16px;height:16px;border-width:2px;"></span> Rejecting...';
-    }
-
-    try {
-        const response = await API.post('/admin/payments/' + currentPaymentId + '/reject', { reason });
-        if (response.success) {
-            Toast.success('Payment rejected. User has been notified.');
-            Modal.close('reject-modal');
-            setTimeout(() => window.location.reload(), 1000);
+    function rejectPayment(id) {
+        if (!id) {
+            Toast.error('Invalid payment ID');
+            return;
         }
-    } catch (error) {
-        Toast.error(error.message || 'Failed to reject payment');
-    } finally {
+
+        currentPaymentId = id;
+        document.getElementById('reject-reason').value = '';
+        Modal.close('payment-modal');
+        Modal.open('reject-modal');
+    }
+
+    async function handleRejectConfirm() {
+        const reason = document.getElementById('reject-reason').value.trim();
+        if (!reason) {
+            Toast.error('Please provide a rejection reason');
+            return;
+        }
+
+        const btn = document.getElementById('confirm-reject-btn');
         if (btn) {
-            btn.disabled = false;
-            btn.innerHTML = 'Reject Payment';
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading-spinner" style="width:16px;height:16px;border-width:2px;"></span> Rejecting...';
+        }
+
+        try {
+            const response = await API.post('/admin/payments/' + currentPaymentId + '/reject', { reason });
+            if (response.success) {
+                Toast.success('Payment rejected. User has been notified.');
+                Modal.close('reject-modal');
+                setTimeout(() => window.location.reload(), 1000);
+            } else {
+                Toast.error(response.message || 'Failed to reject payment');
+            }
+        } catch (error) {
+            console.error('Failed to reject payment:', error);
+            Toast.error(error.message || 'Failed to reject payment');
+        } finally {
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = 'Reject Payment';
+            }
         }
     }
-}
 
-function formatCurrency(amount) {
-    return new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN' }).format(amount);
-}
+    function formatCurrency(amount) {
+        return new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN' }).format(amount);
+    }
 
-function formatPaymentMethod(method) {
-    const methods = {
-        'bank_transfer': 'Bank Transfer',
-        'paystack': 'Paystack',
-        'xpress': 'Xpress'
-    };
-    return methods[method] || method;
-}
+    function formatPaymentMethod(method) {
+        const methods = {
+            'bank_transfer': 'Bank Transfer',
+            'paystack': 'Paystack',
+            'xpress': 'Xpress'
+        };
+        return methods[method] || method;
+    }
 
-function getStatusBadge(status) {
-    const badges = {
-        'completed': 'badge-success',
-        'success': 'badge-success',
-        'pending': 'badge-warning',
-        'failed': 'badge-danger'
-    };
-    return badges[status] || 'badge-secondary';
-}
+    function getStatusBadge(status) {
+        const badges = {
+            'completed': 'badge-success',
+            'success': 'badge-success',
+            'pending': 'badge-warning',
+            'failed': 'badge-danger'
+        };
+        return badges[status] || 'badge-secondary';
+    }
 
-function exportPayments() {
-    const params = new URLSearchParams(window.location.search);
-    params.set('export', 'csv');
-    window.location.href = '/admin/payments?' + params.toString();
-}
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
 
-// Make functions globally accessible for onclick handlers
-window.viewPayment = viewPayment;
-window.approvePayment = approvePayment;
-window.rejectPayment = rejectPayment;
-window.exportPayments = exportPayments;
+    function exportPayments() {
+        const params = new URLSearchParams(window.location.search);
+        params.set('export', 'csv');
+        window.location.href = '/admin/payments?' + params.toString();
+    }
 
-console.log('=== PAYMENTS ADMIN SCRIPT LOADED SUCCESSFULLY ===');
-console.log('viewPayment is:', typeof viewPayment);
-console.log('window.viewPayment is:', typeof window.viewPayment);
+    // Expose functions globally for both onclick handlers and data-action delegation
+    window.viewPayment = viewPayment;
+    window.approvePayment = approvePayment;
+    window.rejectPayment = rejectPayment;
+    window.exportPayments = exportPayments;
+
+    // Initialize when DOM is ready
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initPaymentAdmin);
+    } else {
+        // DOM already loaded, but wait for scripts
+        setTimeout(initPaymentAdmin, 0);
+    }
+})();
 </script>
 
 <style>
