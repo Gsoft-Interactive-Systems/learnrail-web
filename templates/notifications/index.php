@@ -39,7 +39,7 @@
                     </div>
                     <div class="notification-content">
                         <div class="notification-title"><?= e($notification['title'] ?? '') ?></div>
-                        <div class="notification-message"><?= e($notification['message'] ?? '') ?></div>
+                        <div class="notification-message"><?= e($notification['body'] ?? '') ?></div>
                         <div class="notification-time"><?= time_ago($notification['created_at'] ?? '') ?></div>
                     </div>
                     <?php if ($isUnread): ?>

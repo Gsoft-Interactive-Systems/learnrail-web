@@ -2800,7 +2800,7 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
         // Create in-app notification for user
         try {
             \Core\Database::execute("
-                INSERT INTO notifications (user_id, title, message, type, data, is_read, created_at)
+                INSERT INTO notifications (user_id, title, body, type, data, is_read, created_at)
                 VALUES (?, ?, ?, ?, ?, 0, NOW())
             ", [
                 $payment['user_id'],
@@ -2858,7 +2858,7 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
         // Create in-app notification for user
         try {
             \Core\Database::execute("
-                INSERT INTO notifications (user_id, title, message, type, data, is_read, created_at)
+                INSERT INTO notifications (user_id, title, body, type, data, is_read, created_at)
                 VALUES (?, ?, ?, ?, ?, 0, NOW())
             ", [
                 $payment['user_id'],
@@ -2912,7 +2912,7 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
         // Create in-app notification for user
         try {
             \Core\Database::execute("
-                INSERT INTO notifications (user_id, title, message, type, data, is_read, created_at)
+                INSERT INTO notifications (user_id, title, body, type, data, is_read, created_at)
                 VALUES (?, ?, ?, ?, ?, 0, NOW())
             ", [
                 $payment['user_id'],
@@ -2960,7 +2960,7 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
 
         try {
             \Core\Database::execute("
-                INSERT INTO notifications (user_id, title, message, type, data, is_read, created_at)
+                INSERT INTO notifications (user_id, title, body, type, data, is_read, created_at)
                 VALUES (?, ?, ?, ?, ?, 0, NOW())
             ", [
                 $payment['user_id'],
@@ -3010,7 +3010,7 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
 
         try {
             \Core\Database::execute("
-                INSERT INTO notifications (user_id, title, message, type, data, is_read, created_at)
+                INSERT INTO notifications (user_id, title, body, type, data, is_read, created_at)
                 VALUES (?, ?, ?, ?, ?, 0, NOW())
             ", [
                 $payment['user_id'],
