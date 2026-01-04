@@ -2976,6 +2976,84 @@ $router->group(['prefix' => '/admin', 'middleware' => 'admin'], function ($route
         View::json(['success' => true, 'message' => 'Payment rejected']);
     });
 
+    // Resend notification for a payment (for payments approved before notification fix)
+    $router->post('/payments/{id}/resend-notification', function ($id) {
+        $payment = \Core\Database::queryOne("
+            SELECT p.*, u.first_name, u.email,
+                   s.end_date, sp.name as plan_name
+            FROM payments p
+            JOIN users u ON p.user_id = u.id
+            LEFT JOIN subscriptions s ON p.subscription_id = s.id
+            LEFT JOIN subscription_plans sp ON s.plan_id = sp.id
+            WHERE p.id = ?
+        ", [$id]);
+
+        if (!$payment) {
+            View::json(['success' => false, 'message' => 'Payment not found'], 404);
+            return;
+        }
+
+        $planName = $payment['plan_name'] ?? 'Premium';
+        $endDate = $payment['end_date'] ?? 'N/A';
+
+        // Determine notification based on payment status
+        if ($payment['status'] === 'completed') {
+            $title = 'Payment Approved!';
+            $message = 'Your payment has been verified and your ' . $planName . ' subscription is now active until ' . $endDate . '.';
+        } elseif ($payment['status'] === 'failed') {
+            $title = 'Payment Issue';
+            $message = 'Your payment could not be verified. Please contact support for assistance.';
+        } else {
+            View::json(['success' => false, 'message' => 'Cannot send notification for pending payment']);
+            return;
+        }
+
+        try {
+            \Core\Database::execute("
+                INSERT INTO notifications (user_id, title, message, type, data, is_read, created_at)
+                VALUES (?, ?, ?, ?, ?, 0, NOW())
+            ", [
+                $payment['user_id'],
+                $title,
+                $message,
+                'payment',
+                json_encode(['payment_id' => $id, 'end_date' => $endDate, 'plan' => $planName])
+            ]);
+
+            View::json(['success' => true, 'message' => 'Notification sent to user']);
+        } catch (\Exception $e) {
+            error_log('Failed to send notification: ' . $e->getMessage());
+            View::json(['success' => false, 'message' => 'Failed to send notification: ' . $e->getMessage()]);
+        }
+    });
+
+    // Debug: Check notifications table
+    $router->get('/debug/notifications', function () {
+        try {
+            // Check if table exists
+            $tables = \Core\Database::query("SHOW TABLES LIKE 'notifications'");
+            if (empty($tables)) {
+                View::json(['success' => false, 'message' => 'Notifications table does not exist']);
+                return;
+            }
+
+            // Get table structure
+            $columns = \Core\Database::query("DESCRIBE notifications");
+
+            // Get recent notifications
+            $recent = \Core\Database::query("SELECT * FROM notifications ORDER BY created_at DESC LIMIT 10");
+
+            View::json([
+                'success' => true,
+                'table_exists' => true,
+                'columns' => $columns,
+                'recent_notifications' => $recent
+            ]);
+        } catch (\Exception $e) {
+            View::json(['success' => false, 'message' => $e->getMessage()]);
+        }
+    });
+
     // Subscriptions
     $router->get('/subscriptions', function () {
         $subscriptions = \Core\Database::query("

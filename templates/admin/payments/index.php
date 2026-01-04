@@ -290,6 +290,8 @@ if (count($pendingBankTransfers) > 0):
                 approvePayment(parseInt(paymentId, 10));
             } else if (action === 'reject' && paymentId) {
                 rejectPayment(parseInt(paymentId, 10));
+            } else if (action === 'resend-notification' && paymentId) {
+                resendNotification(parseInt(paymentId, 10));
             } else if (action === 'export') {
                 exportPayments();
             }
@@ -377,7 +379,7 @@ if (count($pendingBankTransfers) > 0):
                 ${receiptHtml}
             `;
 
-            // Show actions for pending payments
+            // Show actions based on payment status
             const actionsDiv = document.getElementById('payment-actions');
             if (payment.status === 'pending') {
                 actionsDiv.style.display = 'flex';
@@ -391,6 +393,15 @@ if (count($pendingBankTransfers) > 0):
                             <i class="iconoir-check"></i> Approve
                         </button>
                     </div>
+                `;
+            } else if (payment.status === 'completed' || payment.status === 'failed') {
+                // Show resend notification option for processed payments
+                actionsDiv.style.display = 'flex';
+                actionsDiv.innerHTML = `
+                    <button class="btn btn-ghost" onclick="Modal.close('payment-modal')">Close</button>
+                    <button class="btn btn-outline" data-action="resend-notification" data-payment-id="${id}">
+                        <i class="iconoir-send"></i> Resend Notification
+                    </button>
                 `;
             } else {
                 actionsDiv.style.display = 'none';
@@ -425,6 +436,30 @@ if (count($pendingBankTransfers) > 0):
         } catch (error) {
             console.error('Failed to approve payment:', error);
             Toast.error(error.message || 'Failed to approve payment');
+        }
+    }
+
+    async function resendNotification(id) {
+        if (!id) {
+            Toast.error('Invalid payment ID');
+            return;
+        }
+
+        if (!confirm('Send notification to user about this payment?')) {
+            return;
+        }
+
+        try {
+            const response = await API.post('/admin/payments/' + id + '/resend-notification');
+            if (response.success) {
+                Toast.success('Notification sent to user!');
+                Modal.close('payment-modal');
+            } else {
+                Toast.error(response.message || 'Failed to send notification');
+            }
+        } catch (error) {
+            console.error('Failed to send notification:', error);
+            Toast.error(error.message || 'Failed to send notification');
         }
     }
 
@@ -512,6 +547,7 @@ if (count($pendingBankTransfers) > 0):
     window.viewPayment = viewPayment;
     window.approvePayment = approvePayment;
     window.rejectPayment = rejectPayment;
+    window.resendNotification = resendNotification;
     window.exportPayments = exportPayments;
 
     // Initialize when DOM is ready
